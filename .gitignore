@@ -1,0 +1,9 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log
+infra/.build/
+__pycache__/
+*.pyc
+.env
