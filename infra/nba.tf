@@ -29,12 +29,19 @@ locals {
         TABLE_NAME          = aws_dynamodb_table.profiles.name
         RECEIVER_URL        = aws_apigatewayv2_stage.receiver.invoke_url
         RECEIVER_SECRET_ARN = aws_secretsmanager_secret.receiver.arn
+        MODEL_BUCKET        = aws_s3_bucket.raw.bucket
+        MODEL_KEY           = local.model_key
       }
       policy = jsonencode([
         {
           Effect   = "Allow"
-          Action   = ["dynamodb:PutItem", "dynamodb:DeleteItem"]
+          Action   = ["dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem"]
           Resource = aws_dynamodb_table.profiles.arn
+        },
+        {
+          Effect   = "Allow"
+          Action   = "s3:GetObject"
+          Resource = "${aws_s3_bucket.raw.arn}/${local.model_key}"
         },
         {
           Effect   = "Allow"
@@ -48,8 +55,134 @@ locals {
         },
       ])
     }
+    nba-feedback = {
+      handler = "cdp.nba_feedback.handler"
+      timeout = 60
+      environment = {
+        TABLE_NAME         = aws_dynamodb_table.profiles.name
+        FEEDBACK_STREAM    = aws_kinesis_firehose_delivery_stream.feedback.name
+        DECISION_QUEUE_URL = aws_sqs_queue.nba_decisions.url
+      }
+      policy = jsonencode([
+        {
+          Effect   = "Allow"
+          Action   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+          Resource = aws_dynamodb_table.profiles.arn
+        },
+        {
+          Effect   = "Allow"
+          Action   = "firehose:PutRecord"
+          Resource = aws_kinesis_firehose_delivery_stream.feedback.arn
+        },
+        {
+          Effect   = "Allow"
+          Action   = "sqs:SendMessage"
+          Resource = aws_sqs_queue.nba_decisions.arn
+        },
+        {
+          Effect   = "Allow"
+          Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+          Resource = aws_sqs_queue.feedback.arn
+        },
+      ])
+    }
+    nba-retrain = {
+      handler = "cdp.nba_retrain.handler"
+      timeout = 900
+      memory  = 3008
+      environment = {
+        MODEL_BUCKET    = aws_s3_bucket.raw.bucket
+        MODEL_KEY       = local.model_key
+        FEEDBACK_PREFIX = local.feedback_prefix
+      }
+      policy = jsonencode([
+        {
+          Effect   = "Allow"
+          Action   = "s3:ListBucket"
+          Resource = aws_s3_bucket.raw.arn
+        },
+        {
+          Effect   = "Allow"
+          Action   = "s3:GetObject"
+          Resource = ["${aws_s3_bucket.raw.arn}/${local.feedback_prefix}*", "${aws_s3_bucket.raw.arn}/${local.model_key}"]
+        },
+        {
+          Effect   = "Allow"
+          Action   = "s3:PutObject"
+          Resource = "${aws_s3_bucket.raw.arn}/${local.model_key}"
+        },
+      ])
+    }
+  }
+
+  model_key       = "models/nba/latest.json"
+  feedback_prefix = "feedback/"
+}
+
+# ---------- Feedback loop ----------
+
+resource "aws_sqs_queue" "feedback_dlq" {
+  name                      = "${var.name}-feedback-dlq"
+  message_retention_seconds = 1209600
+  sqs_managed_sse_enabled   = true
+}
+
+resource "aws_sqs_queue" "feedback" {
+  name                       = "${var.name}-feedback"
+  visibility_timeout_seconds = 360
+  sqs_managed_sse_enabled    = true
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.feedback_dlq.arn
+    maxReceiveCount     = 5
+  })
+}
+
+resource "aws_lambda_event_source_mapping" "nba_feedback" {
+  event_source_arn        = aws_sqs_queue.feedback.arn
+  function_name           = aws_lambda_function.fn["nba-feedback"].arn
+  batch_size              = 10
+  function_response_types = ["ReportBatchItemFailures"]
+
+  scaling_config {
+    maximum_concurrency = 10
   }
 }
+
+resource "aws_kinesis_firehose_delivery_stream" "feedback" {
+  name        = "${var.name}-feedback"
+  destination = "extended_s3"
+
+  extended_s3_configuration {
+    role_arn            = aws_iam_role.firehose.arn
+    bucket_arn          = aws_s3_bucket.raw.arn
+    buffering_size      = 5
+    buffering_interval  = 60
+    compression_format  = "GZIP"
+    prefix              = "${local.feedback_prefix}year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/"
+    error_output_prefix = "errors/feedback/!{firehose:error-output-type}/"
+  }
+}
+
+resource "aws_cloudwatch_event_rule" "nba_retrain" {
+  name                = "${var.name}-nba-retrain"
+  schedule_expression = var.nba_retrain_schedule
+  state               = var.nba_schedule_enabled ? "ENABLED" : "DISABLED"
+}
+
+resource "aws_cloudwatch_event_target" "nba_retrain" {
+  rule = aws_cloudwatch_event_rule.nba_retrain.name
+  arn  = aws_lambda_function.fn["nba-retrain"].arn
+}
+
+resource "aws_lambda_permission" "nba_retrain" {
+  statement_id  = "AllowSchedule"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.fn["nba-retrain"].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.nba_retrain.arn
+}
+
+# ---------- Decision queue and schedule ----------
 
 resource "aws_sqs_queue" "nba_decisions_dlq" {
   name                      = "${var.name}-nba-decisions-dlq"
@@ -162,6 +295,11 @@ resource "aws_iam_role_policy" "receiver" {
         Action   = "secretsmanager:GetSecretValue"
         Resource = aws_secretsmanager_secret.receiver.arn
       },
+      {
+        Effect   = "Allow"
+        Action   = "sqs:SendMessage"
+        Resource = aws_sqs_queue.feedback.arn
+      },
     ]
   })
 }
@@ -185,8 +323,9 @@ resource "aws_lambda_function" "receiver" {
 
   environment {
     variables = {
-      TABLE_NAME = aws_dynamodb_table.receiver.name
-      SECRET_ARN = aws_secretsmanager_secret.receiver.arn
+      TABLE_NAME         = aws_dynamodb_table.receiver.name
+      SECRET_ARN         = aws_secretsmanager_secret.receiver.arn
+      FEEDBACK_QUEUE_URL = aws_sqs_queue.feedback.url
     }
   }
 

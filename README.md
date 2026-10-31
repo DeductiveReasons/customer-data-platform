@@ -117,15 +117,45 @@ python scripts/train_model.py
 python scripts/simulate_local.py
 ```
 
-**How decisions work:** each person gets a propensity for `win_back`, `replenish` and `loyalty_upgrade` from one logistic regression per action. The pipeline picks the offer and channel with the highest `propensity x channel lift x offer value - channel cost`, and skips anyone with no positive option. Contact needs `marketing` consent and consent for that channel, and each customer gets at most one message per ISO week.
+**How decisions work:** one logistic regression per asset estimates the chance of registering, given the customer's traits, their engagement so far and the channel. The pipeline picks the asset and channel with the highest `propensity x registration value - channel cost`, and stops if none is positive. Contact needs `marketing` consent and consent for that channel. Each customer gets at most 4 sign-up messages, never the same asset twice in a row, and 10% of decisions explore other assets so the model keeps learning.
+
+### Eric Health asset library
+
+Eric Health is a fictional company used for this demo. `src/cdp/asset_library.json` holds the campaign aimed at fitness program sign-ups: a program introduction, a member story, a free trial, a coach session and an onboarding welcome. Each renders as HTML for email or direct mail. Run `python scripts/preview_assets.py` to create a local gallery.
+
+### Feedback loop
+
+```mermaid
+flowchart TD
+    A[Decide Lambda] -->|asset as HTML| B[Dummy receiver]
+    B -->|simulated opened, clicked, registered, unsubscribed| C[SQS feedback queue]
+    C --> D[Feedback Lambda]
+    D -->|update counters and consent| E[(DynamoDB profile)]
+    D -->|training rows| F[(S3 feedback)]
+    D -->|request next decision| G[SQS decisions queue]
+    G --> A
+    F --> H[Retrain Lambda]
+    H -->|publish if it passes checks| I[(S3 latest model)]
+    I --> A
+```
+
+Feedback affects decisions in two ways. It changes the customer's next decision straight away, because their opens and clicks are model features. It also trains new models when the retrain Lambda runs, which only publishes assets with at least 500 rows, 20 registrations and a holdout AUC of 0.55. Registered customers get one onboarding message and then leave the sign-up journey. An unsubscribe removes consent for that channel.
+
+Run a retrain after a campaign, allowing a few minutes for Firehose to deliver the data:
+
+```sh
+aws lambda invoke --function-name "$(terraform output -raw nba_retrain_function)" /dev/stdout
+```
 
 Limitations:
 
-- The people, responses, model accuracy, offer values, channel lift and costs are all invented. The results show that the pipeline works, not how a real campaign would perform.
-- The propensities are not causal uplift estimates, so a high score does not prove the message caused the response.
-- The model is packaged with the Lambda code, and there is no feature store, retraining schedule, drift monitoring or experiment holdout.
-- A customer can be claimed for the week and not contacted if a delivery later fails all its retries and lands in the dead-letter queue.
-- A real sender would also need suppression lists, unsubscribe links, address validation and legal review of the content.
+- The people, behavior, model accuracy, registration value and channel costs are all invented. The results show that the pipeline works, not how a real campaign would perform.
+- The dummy receiver sends feedback through SQS. A real provider would call a signed webhook, and its events would arrive over hours or days.
+- Direct mail reads cannot be observed, so mail only reports QR code visits.
+- Scores are not causal uplift estimates, because a person who registers might have done so without the message. Measuring lift needs a holdout group that receives nothing.
+- Exploration rows are not reweighted during training, and there is no drift monitoring or automated rollback.
+- A person whose send is recorded but whose feedback never arrives stays paused until the next scan.
+- A real sender would also need suppression lists, working unsubscribe links, address validation and legal review, especially for any health-related claims.
 
 ## Test
 

@@ -10,11 +10,13 @@ from cdp.identity import _to_json
 SEND_BATCH = 10
 
 
-def _profile_message(item):
+def profile_message(item, trigger):
     return {
         "customer_id": item["pk"].split("#", 1)[1],
         "traits": {k[2:]: _to_json(v) for k, v in item.items() if k.startswith("t_")},
         "consent": {k[2:]: v for k, v in item.items() if k.startswith("c_")},
+        "state": {k[2:]: _to_json(v) for k, v in item.items() if k.startswith("s_")},
+        "trigger": trigger,
     }
 
 
@@ -40,7 +42,7 @@ def handler(_event, _context):
     while True:
         page = table.scan(**kwargs)
         for item in page["Items"]:
-            pending.append(_profile_message(item))
+            pending.append(profile_message(item, "scan"))
             scanned += 1
             if len(pending) == SEND_BATCH:
                 _send(sqs, queue_url, pending)

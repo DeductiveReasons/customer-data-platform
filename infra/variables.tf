@@ -25,8 +25,13 @@ variable "nba_schedule" {
   default = "rate(1 day)"
 }
 
+variable "nba_retrain_schedule" {
+  type    = string
+  default = "rate(7 days)"
+}
+
 variable "nba_schedule_enabled" {
-  description = "Run the next best action scan on a schedule"
+  description = "Run the next best action scan and model retraining on a schedule"
   type        = bool
   default     = false
 }

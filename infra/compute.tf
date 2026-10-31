@@ -128,7 +128,7 @@ resource "aws_lambda_function" "fn" {
   architectures    = ["arm64"]
   handler          = each.value.handler
   timeout          = each.value.timeout
-  memory_size      = 256
+  memory_size      = lookup(each.value, "memory", 256)
   filename         = data.archive_file.lambda.output_path
   source_code_hash = data.archive_file.lambda.output_base64sha256
 

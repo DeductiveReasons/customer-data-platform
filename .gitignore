@@ -7,3 +7,4 @@ infra/.build/
 __pycache__/
 *.pyc
 .env
+asset-preview.html

@@ -3,7 +3,6 @@ import json
 import os
 import time
 import urllib.request
-from datetime import datetime, timezone
 
 import boto3
 from botocore.exceptions import ClientError
@@ -12,8 +11,12 @@ from cdp import nba
 
 ENDPOINT_PATHS = {"email": "/email", "direct_mail": "/direct-mail"}
 LEDGER_DAYS = 90
+SCAN_MIN_DAYS_BETWEEN_CONTACTS = 7
+MODEL_CACHE_SECONDS = 300
 _table = None
 _token = None
+_model = None
+_model_loaded_at = 0.0
 
 
 def _get_table():
@@ -31,19 +34,31 @@ def _get_token():
     return _token
 
 
-def contact_period(now=None):
-    year, week, _ = (now or datetime.now(timezone.utc)).isocalendar()
-    return f"{year}-W{week:02d}"
+def _get_model():
+    """Use the latest retrained model, or the bundled one until a retrain has published."""
+    global _model, _model_loaded_at
+    if _model is not None and time.time() - _model_loaded_at < MODEL_CACHE_SECONDS:
+        return _model
+    try:
+        body = boto3.client("s3").get_object(Bucket=os.environ["MODEL_BUCKET"], Key=os.environ["MODEL_KEY"])["Body"]
+        _model = json.loads(body.read())
+    except ClientError:
+        _model = _model or nba.BUNDLED_MODEL
+    _model_loaded_at = time.time()
+    return _model
+
+
+def _ledger_key(message):
+    return {"pk": f"CUSTOMER#{message['customer_id']}", "sk": f"NBA#{message['touch']}"}
 
 
 def _claim(table, message):
-    """Limit each customer to one message per week. Returns False if already contacted."""
+    """Claim this touch so a duplicate decision cannot send it twice."""
     try:
         table.put_item(
             Item={
-                "pk": f"CUSTOMER#{message['customer_id']}",
-                "sk": f"NBA#{message['period']}",
-                "action": message["action"],
+                **_ledger_key(message),
+                "asset_id": message["asset_id"],
                 "channel": message["channel"],
                 "expires_at": int(time.time()) + LEDGER_DAYS * 86400,
             },
@@ -56,8 +71,25 @@ def _claim(table, message):
         raise
 
 
+def _record_send(table, message, now):
+    key = {"pk": f"CUSTOMER#{message['customer_id']}", "sk": "PROFILE"}
+    if message["asset_id"] == nba.assets.ONBOARDING:
+        update = "SET s_onboarded = :yes, s_last_contact = :now"
+        values = {":yes": True, ":now": now}
+    else:
+        update = "SET s_last_asset = :asset, s_last_contact = :now ADD s_touches :one"
+        values = {":asset": message["asset_id"], ":now": now, ":one": 1}
+    table.update_item(Key=key, UpdateExpression=update, ExpressionAttributeValues=values)
+
+
 def _release(table, message):
-    table.delete_item(Key={"pk": f"CUSTOMER#{message['customer_id']}", "sk": f"NBA#{message['period']}"})
+    table.delete_item(Key=_ledger_key(message))
+    if message["asset_id"] != nba.assets.ONBOARDING:
+        table.update_item(
+            Key={"pk": f"CUSTOMER#{message['customer_id']}", "sk": "PROFILE"},
+            UpdateExpression="ADD s_touches :minus",
+            ExpressionAttributeValues={":minus": -1},
+        )
 
 
 def _call_endpoint(message):
@@ -71,13 +103,25 @@ def _call_endpoint(message):
         pass
 
 
-def _process(profile, period, table):
-    decision = nba.decide(profile["customer_id"], profile["traits"], profile["consent"])
-    if decision is None:
+def _too_recent(profile, now):
+    # Scans respect a contact gap. Feedback-triggered decisions are the next step in a journey.
+    if profile.get("trigger") != "scan":
+        return False
+    last_contact = profile.get("state", {}).get("last_contact", 0)
+    return now - last_contact < SCAN_MIN_DAYS_BETWEEN_CONTACTS * 86400
+
+
+def _process(profile, table, model):
+    now = int(time.time())
+    if _too_recent(profile, now):
         return
-    message = {**decision, "period": period, "message_id": f"{decision['customer_id']}-{period}"}
-    if not _claim(table, message):
+    message = nba.decide(
+        profile["customer_id"], profile["traits"], profile["consent"], profile.get("state", {}), model
+    )
+    if message is None or not _claim(table, message):
         return
+    # The send is recorded first because feedback can arrive right after the call.
+    _record_send(table, message, now)
     try:
         _call_endpoint(message)
     except Exception:
@@ -87,11 +131,11 @@ def _process(profile, period, table):
 
 def handler(event, _context):
     table = _get_table()
-    period = contact_period()
+    model = _get_model()
     failures = []
     for record in event["Records"]:
         try:
-            _process(json.loads(record["body"]), period, table)
+            _process(json.loads(record["body"]), table, model)
         except Exception as exc:
             print(f"decision failed for message {record['messageId']}: {type(exc).__name__}")
             failures.append({"itemIdentifier": record["messageId"]})

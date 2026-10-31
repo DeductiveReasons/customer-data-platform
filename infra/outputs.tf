@@ -19,6 +19,10 @@ output "nba_scan_function" {
   value = aws_lambda_function.fn["nba-scan"].function_name
 }
 
+output "nba_retrain_function" {
+  value = aws_lambda_function.fn["nba-retrain"].function_name
+}
+
 output "raw_bucket" {
   value = aws_s3_bucket.raw.bucket
 }
