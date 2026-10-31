@@ -126,6 +126,7 @@ resource "aws_lambda_function" "webapp" {
       MODEL_KEY         = local.model_key
       EVENTS_URL        = "${aws_api_gateway_stage.prod.invoke_url}/v1/events"
       RECEIVER_URL      = aws_apigatewayv2_stage.receiver.invoke_url
+      APPROVALS_TABLE   = aws_dynamodb_table.approvals.name
       WEBAPP_API_ID     = aws_apigatewayv2_api.webapp.id
       STATE_MACHINE_ARN = local.state_machine_arn
       QUEUES            = jsonencode(local.webapp_queues)

@@ -109,6 +109,54 @@ class WebappTests(unittest.TestCase):
         self.assertEqual(self.query.call_count, calls)
 
 
+class VariationTests(unittest.TestCase):
+    def setUp(self):
+        patches = [
+            mock.patch.object(webapp, "_get_token", return_value="secret"),
+            mock.patch.object(webapp.approvals, "stored_records", return_value={}),
+            mock.patch.object(webapp.approvals, "set_status"),
+        ]
+        self.token, self.records, self.set_status = (patch.start() for patch in patches)
+        for patch in patches:
+            self.addCleanup(patch.stop)
+
+    def post(self, variation, body, token="secret"):
+        event = request(f"/api/variations/{variation}/status", token=token)
+        event["requestContext"]["http"]["method"] = "POST"
+        event["body"] = json.dumps(body)
+        return webapp.handler(event, None)
+
+    def test_all_variations_default_to_auto_approved(self):
+        body = json.loads(webapp.handler(request("/api/variations"), None)["body"])
+        self.assertEqual(body["total"], 1000)
+        self.assertEqual(body["totals"], {"approved": 1000, "pending_approval": 0})
+        self.assertEqual(body["variations"][0]["changed_by"], "auto-approval")
+        self.assertEqual(len(body["variations"]), webapp.VARIATION_PAGE_SIZE)
+        self.assertIn("/images/", body["variations"][0]["html"])
+
+    def test_filters_and_pending_status(self):
+        key = "free_trial~email~yoga-03"
+        self.records.return_value = {key: {"status": "pending_approval", "changed_by": "console"}}
+        query = {"status": "pending_approval", "asset": "free_trial", "channel": "email", "theme": "yoga"}
+        body = json.loads(webapp.handler(request("/api/variations", query=query), None)["body"])
+        self.assertEqual(body["matching"], 1)
+        self.assertEqual(body["totals"]["pending_approval"], 1)
+        self.assertEqual(body["variations"][0]["id"], key)
+
+    def test_rejects_bad_filters(self):
+        response = webapp.handler(request("/api/variations", query={"status": "x"}), None)
+        self.assertEqual(response["statusCode"], 400)
+
+    def test_status_change_needs_password_and_valid_input(self):
+        good = "free_trial~email~yoga-03"
+        self.assertEqual(self.post(good, {"status": "approved"}, token="wrong")["statusCode"], 401)
+        self.assertEqual(self.post("bad", {"status": "approved"})["statusCode"], 400)
+        self.assertEqual(self.post(good, {"status": "other"})["statusCode"], 400)
+        self.set_status.assert_not_called()
+        self.assertEqual(self.post(good, {"status": "pending_approval"})["statusCode"], 200)
+        self.set_status.assert_called_once_with(good, "pending_approval")
+
+
 class ProfileTests(unittest.TestCase):
     PROFILE = {
         "customer_id": "c1",

@@ -36,6 +36,7 @@ tr.link{cursor:pointer}tr.link:hover{background:var(--accent-soft)}
 .assets{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px}
 .images{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:12px}.images figure{margin:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}.images img{display:block;width:100%;aspect-ratio:2/1}.images figcaption{padding:7px 9px;font-size:12px;color:var(--muted)}.images figcaption b{display:block;color:var(--text);font-size:13px}.thumb{width:72px;aspect-ratio:2/1;display:block;border-radius:4px}
 .profile{display:flex;flex-wrap:wrap;gap:16px;align-items:center}.avatar{width:84px;height:84px;border-radius:50%;display:grid;place-items:center;color:#fff;font-size:30px;font-weight:700;flex:none}.who{flex:1;min-width:210px}.who h1{margin:0}.who p{margin:2px 0}.nextimg{margin:0;width:190px;max-width:100%}.nextimg img{width:100%;aspect-ratio:2/1;object-fit:cover;border-radius:6px;display:block}.nextimg figcaption{font-size:12px;color:var(--muted)}.details{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px 18px;margin:0}.details dt{color:var(--muted);font-size:13px}.details dd{margin:0}.msg{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;padding:11px 0;border-top:1px solid var(--line);font-size:14px}.msgbody{flex:1;min-width:230px}.msgframe{width:100%;height:430px;border:1px solid var(--line);border-radius:6px;background:#fff}
+.vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}.vcard{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:0 0 12px;overflow:hidden}.vcard>img{display:block;width:100%;aspect-ratio:2/1;object-fit:cover}.vcard .vb{padding:10px 12px 0;font-size:14px}.vcard .vb b{display:block}.vactions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.approved{background:#d9f2e3;color:#116b3a;border-radius:5px;padding:1px 7px;font-size:12px;font-weight:600}.pending{background:#fbeccb;color:#8a5200;border-radius:5px;padding:1px 7px;font-size:12px;font-weight:600}.vframe{width:100%;height:560px;border:1px solid var(--line);border-radius:6px;background:#fff;margin-top:8px}.pager{display:flex;gap:10px;align-items:center;margin-top:14px}
 .asset iframe{width:100%;height:340px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .asset h2{margin-bottom:2px}
 .tag{display:inline-block;background:var(--accent-soft);border-radius:5px;padding:0 7px;font-size:12px}
@@ -70,7 +71,7 @@ a{color:var(--accent)}
   <main id="view" tabindex="-1"></main>
 </div>
 <script>
-const VIEWS={overview:'Overview',performance:'Performance',assets:'Digital assets',content:'Image library',people:'People',monitoring:'Monitoring',usage:'Usage and costs'};
+const VIEWS={overview:'Overview',performance:'Performance',variations:'Digital assets',assets:'Campaigns',content:'Image library',people:'People',monitoring:'Monitoring',usage:'Usage and costs'};
 const STATUSES={active:'Active journey',onboarding_due:'Onboarding due',registered:'Registered',journey_complete:'Journey complete',no_marketing_consent:'No marketing consent',no_contact_option:'No contact option'};
 const LABELS={email:'Email',direct_mail:'Direct mail',no_contact:'No contact'};
 const when=v=>{if(!v)return '–';const d=new Date(v);return isNaN(d)?v:d.toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})};
@@ -137,12 +138,38 @@ const render={
       card.querySelectorAll('[data-ch]').forEach(x=>x.classList.toggle('on',x===b));
       card.querySelector('iframe').srcdoc=d.assets.find(a=>a.id===card.dataset.id)[b.dataset.ch+'_html']})})};
   view._after=after;
-  return `<h1>Digital assets</h1><p class="sub">${esc(d.brand.disclaimer)} Goal: ${esc(d.brand.goal)}.</p><div class="assets">${d.assets.map(a=>{
+  return `<h1>Campaigns</h1><p class="sub">${esc(d.brand.disclaimer)} Goal: ${esc(d.brand.goal)}.</p><div class="assets">${d.assets.map(a=>{
    const rows=d.funnel.filter(r=>r.asset_id===a.id),t=funnelTotals(rows);
    return `<article class="panel asset" data-id="${esc(a.id)}"><h2>${esc(a.name)}</h2><span class="tag">${esc(a.stage)}</span>
     <p class="muted">${esc(a.subject)}</p><p>${num(t.delivered)} delivered · ${num(t.registered)} registered · ${pct(t.registered,t.delivered)} sign-up rate</p>
     <div class="seg"><button class="small on" data-ch="email">Email</button><button class="small" data-ch="direct_mail">Direct mail</button></div>
     <iframe sandbox title="${esc(a.name)} preview" srcdoc="${esc(a.email_html)}"></iframe></article>`}).join('')}</div>`;
+ },
+ async variations(params={}){
+  const q=new URLSearchParams();['asset','channel','theme','status','page'].forEach(k=>{if(params[k])q.set(k,params[k])});
+  const d=await api('/api/variations?'+q),pages=Math.max(1,Math.ceil(d.matching/d.page_size));
+  const opts=(map,cur)=>Object.entries(map).map(([k,v])=>`<option value="${esc(k)}" ${cur===k?'selected':''}>${esc(v)}</option>`).join('');
+  view._after=()=>{
+   const read=page=>({asset:document.getElementById('fa').value,channel:document.getElementById('fc').value,theme:document.getElementById('ft').value,status:document.getElementById('fs').value,page});
+   ['fa','fc','ft','fs'].forEach(i=>document.getElementById(i).onchange=()=>show('variations',read(1)));
+   const nav=(id,page)=>{const b=document.getElementById(id);if(b)b.onclick=()=>show('variations',read(page))};nav('pv',d.page-1);nav('nx',d.page+1);
+   document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>{const v=d.variations[Number(b.dataset.open)],f=document.getElementById('vf'+b.dataset.open);f.hidden=!f.hidden;b.textContent=f.hidden?'Preview':'Hide preview';if(!f.hidden&&!f.srcdoc)f.srcdoc=v.html});
+   document.querySelectorAll('[data-set]').forEach(b=>b.onclick=async()=>{b.disabled=true;const v=d.variations[Number(b.dataset.i)];
+    try{const r=await fetch('/api/variations/'+encodeURIComponent(v.id)+'/status',{method:'POST',headers:{Authorization:'Bearer '+password,'Content-Type':'application/json'},body:JSON.stringify({status:b.dataset.set})});if(!r.ok)throw new Error();show('variations',params)}
+    catch(e){b.disabled=false;b.textContent='Could not save. Try again'}})};
+  return `<h1>Digital assets</h1><p class="sub">Every deliverable variation: ${num(d.total)} combinations of asset, channel and image. Variations are auto-approved for now. Pending variations are not sent.</p>
+  <div class="tiles"><div class="tile"><b>${num(d.total)}</b><span>Variations</span></div><div class="tile"><b>${num(d.totals.approved)}</b><span>Approved</span></div><div class="tile"><b>${num(d.totals.pending_approval)}</b><span>Pending approval</span></div></div>
+  <div class="filters"><label>Asset <select id="fa"><option value="">All</option>${opts(d.assets,params.asset)}</select></label>
+  <label>Channel <select id="fc"><option value="">All</option>${opts({email:'Email',direct_mail:'Direct mail'},params.channel)}</select></label>
+  <label>Theme <select id="ft"><option value="">All</option>${opts(d.themes,params.theme)}</select></label>
+  <label>Status <select id="fs"><option value="">All</option>${opts({approved:'Approved',pending_approval:'Pending approval'},params.status)}</select></label></div>
+  <p class="muted">${num(d.matching)} matching · Page ${d.page} of ${pages}</p>
+  <div class="vgrid">${d.variations.map((v,i)=>`<article class="vcard"><img loading="lazy" src="/images/${esc(v.image_id)}.jpg" alt="${esc(v.theme)} image">
+   <div class="vb"><b>${esc(v.asset)}</b>${esc(LABELS[v.channel])} · ${esc(v.theme)}<br><span class="muted">${esc(v.subject)}</span><br>CTA: ${esc(v.cta)}<br>
+   <span class="${v.status==='approved'?'approved':'pending'}">${v.status==='approved'?'Approved':'Pending approval'}</span> <span class="muted">${esc(v.changed_by)}</span>
+   <div class="vactions"><button class="small" data-open="${i}">Preview</button>${v.status==='approved'?`<button class="small" data-set="pending_approval" data-i="${i}">Set to pending</button>`:`<button class="small" data-set="approved" data-i="${i}">Approve</button>`}</div>
+   <iframe id="vf${i}" hidden sandbox class="vframe" title="${esc(v.asset)} preview"></iframe></div></article>`).join('')||'<p class="muted">No matching variations.</p>'}</div>
+  <div class="pager">${d.page>1?'<button class="small" id="pv">Previous</button>':''}${d.page<pages?'<button class="small" id="nx">Next</button>':''}</div>`;
  },
  async content(){
   const d=await api('/api/content');
@@ -205,7 +232,7 @@ const render={
   </dl></div>
   <div class="panel"><h2>Offer propensity scores, right now</h2>${table([{t:'Asset',f:r=>assetName(r.asset_id)},{t:'Channel',f:r=>LABELS[r.channel]||r.channel},{t:'Sign-up propensity',n:1,f:r=>p100(r.propensity)},{t:'Expected value',n:1,f:r=>'$'+Number(r.expected_value).toFixed(2)}],d.offers,{empty:'No scores, because this person has not given consent for any channel.'})}</div>
   <div class="panel"><h2>Image theme scores, right now</h2>${d.themes.map(t=>`<div class="bar"><span>${esc(t.label)}</span><i style="width:${(100*t.click_score/Math.max(.001,d.themes[0].click_score)).toFixed(1)}%"></i><em>${p100(t.click_score)}</em></div>`).join('')}</div>
-  <div class="panel"><h2>Previous messages</h2>${d.history.length?d.history.map((m,i)=>`<article class="msg">
+  <div class="panel"><h2>Previous messages</h2><p class="muted">Previews use the current email design and copy. Earlier sends may have looked different.</p>${d.history.length?d.history.map((m,i)=>`<article class="msg">
     ${m.image_id?`<img class="thumb" src="/images/${esc(m.image_id)}.jpg" alt="${esc(m.image_id)}">`:''}
     <div class="msgbody"><b>${esc(assetName(m.asset_id))}</b> · ${esc(LABELS[m.channel]||m.channel)} · touch ${esc(m.touch)}
      <div class="muted">${esc(m.decided_at||'')} · ${esc(m.selection||'')} · ${esc(m.trigger||'')}</div>

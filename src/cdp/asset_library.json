@@ -1,8 +1,10 @@
 {
   "brand": {
     "name": "Eric Health",
+    "program": "Eric Health Fitness Program",
     "domain": "erichealth.example",
-    "goal": "Fitness program sign-up",
+    "address": "100 Example Way, Anytown, USA",
+    "goal": "Fitness program registration",
     "disclaimer": "Eric Health is a fictional company. This is sample content for a software demo."
   },
   "assets": {
@@ -11,8 +13,10 @@
       "stage": "awareness",
       "subject": "Move more, on your schedule",
       "headline": "A fitness program that fits your week",
-      "body": "Short guided workouts, simple weekly goals and a community to keep you going.",
-      "cta": "See how it works",
+      "body": "Short guided workouts, simple weekly goals and a community to keep you going. Register today and start whenever you're ready.",
+      "cta": "Register for the program",
+      "highlight_title": "What's included",
+      "highlight": "Guided workouts, weekly plans and support from people working toward the same goals.",
       "accent": "#2563eb"
     },
     "success_story": {
@@ -20,8 +24,10 @@
       "stage": "consideration",
       "subject": "How Sam found a routine that stuck",
       "headline": "Sam started with ten minutes a day",
-      "body": "Sam is a fictional member. Their story shows how small sessions can become a regular routine.",
-      "cta": "Read Sam's story",
+      "body": "Sam is a fictional member. Their story shows how small sessions can become a regular routine. Yours can start when you register.",
+      "cta": "Register for the program",
+      "highlight_title": "Start small",
+      "highlight": "Choose sessions that suit your week, then build at your own pace.",
       "accent": "#7c3aed"
     },
     "free_trial": {
@@ -29,27 +35,33 @@
       "stage": "conversion",
       "subject": "Try the fitness program free for 30 days",
       "headline": "Your first 30 days are on us",
-      "body": "Get every workout and weekly plan during your trial. Cancel at any time.",
-      "cta": "Start my free trial",
-      "accent": "#059669"
+      "body": "Get every workout and weekly plan during your trial. Register now to begin, and cancel at any time.",
+      "cta": "Register for the program",
+      "highlight_title": "Free for 30 days",
+      "highlight": "Full access to the program during your trial. Cancel at any time.",
+      "accent": "#047857"
     },
     "coach_consult": {
       "name": "Free coach session",
       "stage": "conversion",
       "subject": "Plan your first month with a coach",
       "headline": "Get a plan built around you",
-      "body": "Book a free 15-minute session with a fitness coach to set goals that suit your week.",
-      "cta": "Book my session",
-      "accent": "#d97706"
+      "body": "Register for the program and book a free 15-minute session with a fitness coach to set goals that suit your week.",
+      "cta": "Register for the program",
+      "highlight_title": "A free 15-minute session",
+      "highlight": "Talk through your schedule and your goals, then leave with a simple plan for your first month.",
+      "accent": "#b45309"
     },
     "onboarding_welcome": {
       "name": "Welcome and first workout",
       "stage": "onboarding",
       "subject": "Welcome to the program",
       "headline": "You're in. Here's your first workout",
-      "body": "Thanks for signing up. Start with a ten-minute session whenever you're ready.",
+      "body": "Thanks for registering. Start with a ten-minute session whenever you're ready.",
       "cta": "Start my first workout",
-      "accent": "#0891b2"
+      "highlight_title": "Your first week",
+      "highlight": "Try two or three short sessions, then choose what you'd like to do more of.",
+      "accent": "#0e7490"
     }
   }
 }

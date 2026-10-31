@@ -91,7 +91,7 @@ def score(model, theme, features):
     return 1 / (1 + math.exp(-max(min(total, 30), -30)))
 
 
-def choose(customer_id, touch, features, state, model, rng):
+def choose(customer_id, touch, features, state, model, rng, is_blocked=lambda image_id: False):
     """Pick a theme with the model, then a variant that differs from the last image shown."""
     scored = [(score(model, theme, features), theme) for theme in THEMES]
     scored = [item for item in scored if item[0] is not None]
@@ -105,7 +105,14 @@ def choose(customer_id, touch, features, state, model, rng):
     variant = digest[0] % VARIANTS + 1
     image_id = f"{theme}-{variant:02d}"
     if image_id == state.get("last_image"):
-        image_id = f"{theme}-{variant % VARIANTS + 1:02d}"
+        variant = variant % VARIANTS + 1
+    for _ in range(VARIANTS):
+        image_id = f"{theme}-{variant:02d}"
+        if not is_blocked(image_id):
+            break
+        variant = variant % VARIANTS + 1
+    else:
+        return None  # Every image in this theme is pending approval for this message.
     probability = score(model, theme, features)
     return {
         "image_id": image_id,

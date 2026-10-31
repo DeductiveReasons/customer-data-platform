@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import boto3
 from botocore.exceptions import ClientError
 
-from cdp import nba
+from cdp import approvals, nba
 
 ENDPOINT_PATHS = {"email": "/email", "direct_mail": "/direct-mail"}
 LEDGER_DAYS = 90
@@ -152,7 +152,12 @@ def _process(profile, table, model):
     if _too_recent(profile, now):
         return
     message = nba.decide(
-        profile["customer_id"], profile["traits"], profile["consent"], profile.get("state", {}), model
+        profile["customer_id"],
+        profile["traits"],
+        profile["consent"],
+        profile.get("state", {}),
+        model,
+        pending=approvals.pending_ids(),
     )
     if message is None or not _claim(table, message):
         return

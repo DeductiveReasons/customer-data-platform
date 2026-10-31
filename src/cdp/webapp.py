@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 
-from cdp import assets, content, nba
+from cdp import approvals, assets, content, nba
 
 with open(os.path.join(os.path.dirname(__file__), "webapp.html"), encoding="utf-8") as page_file:
     PAGE = page_file.read()
@@ -83,6 +83,7 @@ ORDER BY h.decided_at
 
 COST_CACHE_SECONDS = 3600  # Each Cost Explorer request costs about one cent.
 USAGE_DAYS = 30
+VARIATION_PAGE_SIZE = 12
 RECORDS_SQL = """
 SELECT
   (SELECT COUNT(*) FROM people) AS people,
@@ -201,6 +202,8 @@ def _endpoints():
         {"group": "Console", "method": "GET", "url": "/api/overview", "auth": "Password", "purpose": "Totals, registration rate and endpoint library"},
         {"group": "Console", "method": "GET", "url": "/api/performance", "auth": "Password", "purpose": "Funnels and current next best actions"},
         {"group": "Console", "method": "GET", "url": "/api/assets", "auth": "Password", "purpose": "Campaign assets and previews"},
+        {"group": "Console", "method": "GET", "url": "/api/variations", "auth": "Password", "purpose": "Browse every deliverable variation and its approval status"},
+        {"group": "Console", "method": "POST", "url": "/api/variations/{id}/status", "auth": "Password", "purpose": "Approve a variation or set it to pending approval"},
         {"group": "Console", "method": "GET", "url": "/api/content", "auth": "Password", "purpose": "Image library results"},
         {"group": "Console", "method": "GET", "url": "/api/people", "auth": "Password", "purpose": "Search and filter people"},
         {"group": "Console", "method": "GET", "url": "/api/people/{id}", "auth": "Password", "purpose": "One person's profile, scores and messages"},
@@ -253,6 +256,83 @@ def _content():
             }
         )
     return {"images": images}
+
+
+def _variations(query):
+    records = approvals.stored_records()
+    asset_filter = query.get("asset") or ""
+    channel_filter = query.get("channel") or ""
+    theme_filter = query.get("theme") or ""
+    status_filter = query.get("status") or ""
+    if asset_filter and asset_filter not in assets.ASSETS:
+        raise BadRequest("unknown asset")
+    if channel_filter and channel_filter not in approvals.CHANNELS:
+        raise BadRequest("unknown channel")
+    if theme_filter and theme_filter not in content.THEMES:
+        raise BadRequest("unknown theme")
+    if status_filter and status_filter not in (approvals.APPROVED, approvals.PENDING):
+        raise BadRequest("unknown status")
+    try:
+        page = max(1, int(query.get("page") or 1))
+    except ValueError as exc:
+        raise BadRequest("invalid page") from exc
+
+    totals = {approvals.APPROVED: 0, approvals.PENDING: 0}
+    matches = []
+    for asset_id, channel, image in approvals.all_variations():
+        key = approvals.variation_id(asset_id, channel, image["id"])
+        record = records.get(key, {})
+        status = record.get("status", approvals.APPROVED)
+        totals[status] = totals.get(status, 0) + 1
+        if (
+            (not asset_filter or asset_id == asset_filter)
+            and (not channel_filter or channel == channel_filter)
+            and (not theme_filter or image["theme"] == theme_filter)
+            and (not status_filter or status == status_filter)
+        ):
+            matches.append(
+                {
+                    "id": key,
+                    "asset_id": asset_id,
+                    "asset": assets.ASSETS[asset_id]["name"],
+                    "channel": channel,
+                    "image_id": image["id"],
+                    "theme": image["label"],
+                    "subject": assets.ASSETS[asset_id]["subject"],
+                    "cta": assets.ASSETS[asset_id]["cta"],
+                    "status": status,
+                    "changed_by": record.get("changed_by", approvals.AUTO_APPROVER),
+                }
+            )
+    start = (page - 1) * VARIATION_PAGE_SIZE
+    shown = matches[start : start + VARIATION_PAGE_SIZE]
+    for item in shown:
+        item["html"] = assets.render(
+            item["asset_id"], item["channel"], "Alex", "preview", f"/images/{item['image_id']}.jpg", item["theme"]
+        )
+    return {
+        "total": len(approvals.all_variations()),
+        "totals": totals,
+        "matching": len(matches),
+        "page": page,
+        "page_size": VARIATION_PAGE_SIZE,
+        "variations": shown,
+        "assets": {asset_id: asset["name"] for asset_id, asset in assets.ASSETS.items()},
+        "themes": {theme: config["label"] for theme, config in content.THEMES.items()},
+    }
+
+
+def _set_variation_status(variation, body):
+    if approvals.parse(variation) is None:
+        raise BadRequest("unknown variation")
+    try:
+        status = json.loads(body or "{}").get("status")
+    except (ValueError, AttributeError) as exc:
+        raise BadRequest("invalid request") from exc
+    if status not in (approvals.APPROVED, approvals.PENDING):
+        raise BadRequest("unknown status")
+    approvals.set_status(variation, status)
+    return {"id": variation, "status": status}
 
 
 def _people(query):
@@ -569,6 +649,8 @@ def _route(path, query):
         return _content()
     if path == "/api/usage":
         return _cached("usage", _usage)
+    if path == "/api/variations":
+        return _variations(query)
     if path == "/api/people":
         return _people(query)
     if path == "/api/monitoring":
@@ -601,6 +683,20 @@ def handler(event, _context):
     method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
     path = event.get("rawPath", "/")
     host = event.get("requestContext", {}).get("domainName", "")
+    status_match = re.match(r"^/api/variations/([^/]+)/status$", path)
+    if method == "POST" and status_match:
+        if not _authorized(event):
+            return _response(401, {"error": "unauthorized"})
+        body = event.get("body")
+        if event.get("isBase64Encoded") and body:
+            body = base64.b64decode(body).decode()
+        try:
+            return _response(200, _set_variation_status(status_match.group(1), body), host=host)
+        except BadRequest as exc:
+            return _response(400, {"error": str(exc)})
+        except Exception as exc:
+            print(f"status change failed: {type(exc).__name__}")
+            return _response(500, {"error": "Could not change the status."})
     if method != "GET":
         return _response(405, {"error": "method not allowed"})
     if path == "/":

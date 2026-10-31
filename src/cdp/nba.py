@@ -116,11 +116,21 @@ def _recipient(channel, traits):
     }
 
 
-def _message(customer_id, asset_id, channel, traits, state, model, choice, rng):
+def _message(customer_id, asset_id, channel, traits, state, model, choice, rng, pending=frozenset()):
     touch = "onboarding" if asset_id == assets.ONBOARDING else str(state.get("touches", 0) + 1)
     message_id = f"{customer_id}-{touch}"
     features = {k: (0.0 if v is None else v) for k, v in features_for(traits, state, channel).items()}
-    image = content.choose(customer_id, touch, features, state, model.get("content") or content.BUNDLED_MODEL, rng)
+    image = content.choose(
+        customer_id,
+        touch,
+        features,
+        state,
+        model.get("content") or content.BUNDLED_MODEL,
+        rng,
+        lambda image_id: f"{asset_id}~{channel}~{image_id}" in pending,
+    )
+    if image is None:
+        return None
     alt = content.THEMES[image["image_theme"]]["label"]
     return {
         **choice,
@@ -141,7 +151,7 @@ def _message(customer_id, asset_id, channel, traits, state, model, choice, rng):
     }
 
 
-def decide(customer_id, traits, consent, state, model=None, rng=random):
+def decide(customer_id, traits, consent, state, model=None, rng=random, pending=frozenset()):
     """Return the next message, or None if no contact is allowed or worthwhile."""
     model = model or BUNDLED_MODEL
     channels = eligible_channels(traits, consent)
@@ -152,7 +162,7 @@ def decide(customer_id, traits, consent, state, model=None, rng=random):
         if state.get("onboarded"):
             return None
         return _message(
-            customer_id, assets.ONBOARDING, channels[0], traits, state, model, {"selection": "onboarding"}, rng
+            customer_id, assets.ONBOARDING, channels[0], traits, state, model, {"selection": "onboarding"}, rng, pending
         )
 
     if state.get("touches", 0) >= MAX_TOUCHES:
@@ -169,14 +179,19 @@ def decide(customer_id, traits, consent, state, model=None, rng=random):
     if not scored:
         return None
 
+    ranked = sorted(scored, key=lambda item: item[0], reverse=True)
     if rng.random() < EXPLORATION_RATE:
-        value, probability, asset_id, channel = rng.choice(scored)
+        first = rng.choice(scored)
+        ranked = [first] + [item for item in ranked if item is not first]
         selection = "explore"
     else:
-        value, probability, asset_id, channel = max(scored, key=lambda item: item[0])
+        ranked = [item for item in ranked if item[0] > 0]
         selection = "best"
-        if value <= 0:
-            return None
 
-    choice = {"selection": selection, "propensity": round(probability, 4), "expected_value": round(value, 2)}
-    return _message(customer_id, asset_id, channel, traits, state, model, choice, rng)
+    # If a variation is pending approval, move on to the next best approved option.
+    for value, probability, asset_id, channel in ranked:
+        choice = {"selection": selection, "propensity": round(probability, 4), "expected_value": round(value, 2)}
+        message = _message(customer_id, asset_id, channel, traits, state, model, choice, rng, pending)
+        if message is not None:
+            return message
+    return None

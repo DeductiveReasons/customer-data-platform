@@ -231,6 +231,7 @@ resource "aws_lambda_function" "export" {
       BUCKET           = aws_s3_bucket.raw.bucket
       PEOPLE_KEY       = "${local.people_prefix}latest.json.gz"
       MODEL_KEY        = local.model_key
+      APPROVALS_TABLE  = aws_dynamodb_table.approvals.name
       METRIC_NAMESPACE = local.metric_namespace
     }
   }

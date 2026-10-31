@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import boto3
 from boto3.dynamodb.conditions import Attr
 
-from cdp import nba
+from cdp import approvals, nba
 from cdp.nba_scan import profile_message
 
 
@@ -28,10 +28,10 @@ def _status(state, consent, decision):
     return "no_contact_option"
 
 
-def person_row(item, snapshot_at, model):
+def person_row(item, snapshot_at, model, pending=frozenset()):
     profile = profile_message(item, "export")
     traits, consent, state = profile["traits"], profile["consent"], profile["state"]
-    decision = nba.decide(profile["customer_id"], traits, consent, state, model, _NeverExplore())
+    decision = nba.decide(profile["customer_id"], traits, consent, state, model, _NeverExplore(), pending)
     return {
         "customer_id": profile["customer_id"],
         "first_name": traits.get("first_name"),
@@ -98,11 +98,12 @@ def handler(_event, _context):
     model = _load_model(s3)
     snapshot_at = datetime.now(timezone.utc).isoformat()
 
+    pending = approvals.pending_ids()
     rows = []
     kwargs = {"FilterExpression": Attr("sk").eq("PROFILE")}
     while True:
         page = table.scan(**kwargs)
-        rows.extend(person_row(item, snapshot_at, model) for item in page["Items"])
+        rows.extend(person_row(item, snapshot_at, model, pending) for item in page["Items"])
         if "LastEvaluatedKey" not in page:
             break
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]

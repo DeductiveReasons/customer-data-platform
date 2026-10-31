@@ -4,6 +4,45 @@ An event-driven customer data pipeline in the style of Segment, Hightouch or Rud
 
 Failures in Braze, a CRM or any other destination never stop events from being received. Each destination has its own queue, retries and dead-letter queue.
 
+It also includes a next best action demo for Eric Health, a fictional company: 10,000 made-up people, propensity models, 1,000 message variations with approval statuses, a dummy email and direct mail service, a feedback loop and a web app. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
+
+## Quick start
+
+You need an AWS account, the AWS CLI, Terraform 1.6+ and Python 3.12. This creates billable resources, so set an AWS budget first. Running the full demo cost us a small amount, but check your own bill.
+
+```sh
+git clone https://github.com/DeductiveReasons/customer-data-platform.git
+cd customer-data-platform
+python -m unittest discover -s tests
+
+# Sign in, then deploy. If Terraform cannot read your AWS login session, export it first:
+# eval "$(aws configure export-credentials --profile <profile> --format env)"
+aws login --profile <profile>
+cd infra
+terraform init
+terraform plan -var="region=us-east-2" -out=deploy.tfplan
+terraform apply deploy.tfplan
+
+# Open the web app and get its password.
+terraform output webapp_url
+aws secretsmanager get-secret-value --secret-id "$(terraform output -raw webapp_secret)" --query SecretString --output text
+
+# Load the 10,000 made-up people, then follow "Next best action demo" below.
+API_KEY=$(aws apigateway get-api-key --include-value --api-key "$(terraform output -raw api_key_id)" --query value --output text)
+python ../scripts/ingest_sample.py "$(terraform output -raw events_url)" "$API_KEY"
+```
+
+Images are not stored in Git. Until you generate them, messages use built-in illustrations. Generating all 100 uses Stable Image Core on Amazon Bedrock in `us-west-2`, which is charged per image and may need a Marketplace agreement:
+
+```sh
+pip install boto3
+python ../scripts/generate_ai_images.py "$(terraform output -raw raw_bucket)" ./ai-images
+```
+
+To restart everyone's journey and archive earlier results, run `python ../scripts/reset_campaign.py "$(terraform output -raw profiles_table)" "$(terraform output -raw raw_bucket)" <run-name>`.
+
+To remove everything, set `deletion_protection=false` and apply, empty the S3 bucket, then run `terraform destroy`.
+
 ```mermaid
 flowchart TD
     A[Web and mobile] --> D
@@ -121,7 +160,7 @@ python scripts/simulate_local.py
 
 ### Eric Health asset library
 
-Eric Health is a fictional company used for this demo. `src/cdp/asset_library.json` holds the campaign aimed at fitness program sign-ups: a program introduction, a member story, a free trial, a coach session and an onboarding welcome. Each renders as HTML for email or direct mail. Run `python scripts/preview_assets.py` to create a local gallery.
+Eric Health is a fictional company used for this demo. `src/cdp/asset_library.json` holds the campaign aimed at fitness program registrations: a program introduction, a member story, a free trial, a coach session and an onboarding welcome. Each renders as HTML for email or direct mail, combined with one of 100 images in `src/cdp/content.py`. That makes 1,000 variations, all auto-approved for now, and any of them can be set to pending approval in the web app. Run `python scripts/preview_assets.py` to create a local gallery.
 
 ### Feedback loop
 

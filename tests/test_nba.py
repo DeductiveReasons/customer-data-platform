@@ -23,7 +23,7 @@ except ImportError:
     sys.modules["boto3.dynamodb"] = types.ModuleType("boto3.dynamodb")
     sys.modules["boto3.dynamodb.conditions"] = conditions
 
-from cdp import archive, assets, nba, nba_decide, nba_export, nba_feedback, nba_retrain, nba_scan, receiver, simulator, training  # noqa: E402
+from cdp import approvals, archive, assets, content, nba, nba_decide, nba_export, nba_feedback, nba_retrain, nba_scan, receiver, simulator, training  # noqa: E402
 from journey import run  # noqa: E402
 from sample_data import generate, to_events  # noqa: E402
 from test_cdp import ClientError  # noqa: E402
@@ -75,6 +75,9 @@ class AssetTests(unittest.TestCase):
             for channel in ("email", "direct_mail"):
                 content = assets.render(asset_id, channel, "Alex", "m1")
                 self.assertIn("fictional company", content)
+                if asset_id != assets.ONBOARDING:
+                    self.assertIn("Register for the program", content)
+                    self.assertIn("/register?", content)
                 self.assertIn("erichealth.example", content)
 
     def test_customer_data_is_escaped(self):
@@ -138,6 +141,43 @@ class DecisionTests(unittest.TestCase):
             for seed in range(300)
         }
         self.assertEqual(picked, set(assets.SIGNUP_ASSETS))
+
+
+class ApprovalTests(unittest.TestCase):
+    def test_there_is_one_variation_per_asset_channel_and_image(self):
+        self.assertEqual(len(approvals.all_variations()), 5 * 2 * 100)
+
+    def test_parse_accepts_only_real_variations(self):
+        self.assertEqual(approvals.parse("free_trial~email~yoga-03"), ("free_trial", "email", "yoga-03"))
+        for bad in ("free_trial~email~yoga-99", "x~email~yoga-03", "free_trial~sms~yoga-03", "a/b", ""):
+            with self.subTest(bad=bad):
+                self.assertIsNone(approvals.parse(bad))
+
+    def test_pending_image_is_not_sent(self):
+        first = decide(consent={"marketing": True, "email": True})
+        pending = {approvals.variation_id(first["asset_id"], "email", first["image_id"])}
+        second = nba.decide(
+            "c1", TRAITS, {"marketing": True, "email": True}, {}, rng=NoExplore(), pending=pending
+        )
+        self.assertEqual(second["asset_id"], first["asset_id"])
+        self.assertNotEqual(second["image_id"], first["image_id"])
+        self.assertEqual(second["image_theme"], first["image_theme"])
+
+    def test_next_best_asset_is_used_when_all_images_are_pending(self):
+        first = decide(consent={"marketing": True, "email": True})
+        pending = {
+            approvals.variation_id(first["asset_id"], "email", image["id"]) for image in content.all_images()
+        }
+        second = nba.decide(
+            "c1", TRAITS, {"marketing": True, "email": True}, {}, rng=NoExplore(), pending=pending
+        )
+        self.assertNotEqual(second["asset_id"], first["asset_id"])
+
+    def test_nothing_is_sent_when_everything_is_pending(self):
+        pending = {
+            approvals.variation_id(a, c, image["id"]) for a, c, image in approvals.all_variations()
+        }
+        self.assertIsNone(nba.decide("c1", TRAITS, ALL_CONSENT, {}, rng=NoExplore(), pending=pending))
 
 
 class SimulatorTests(unittest.TestCase):
@@ -264,6 +304,7 @@ class DecideHandlerTests(unittest.TestCase):
             mock.patch.object(nba_decide, "_get_table", return_value=self.table),
             mock.patch.object(nba_decide, "_get_token", return_value="token"),
             mock.patch.object(nba_decide, "_get_model", return_value=nba.BUNDLED_MODEL),
+            mock.patch.object(nba_decide.approvals, "pending_ids", return_value=set()),
             mock.patch.object(nba_decide, "_get_sqs", return_value=self.sqs),
             mock.patch.object(nba.random, "random", return_value=0.99),
             mock.patch.dict(os.environ, {"RECEIVER_URL": "https://receiver.example.com/", "ARCHIVE_QUEUE_URL": "a"}),
@@ -284,7 +325,7 @@ class DecideHandlerTests(unittest.TestCase):
         payload = json.loads(request.data)
         self.assertEqual(request.full_url, "https://receiver.example.com" + nba_decide.ENDPOINT_PATHS[payload["channel"]])
         self.assertEqual(request.get_header("Authorization"), "Bearer token")
-        self.assertIn("<html>", payload["content_html"])
+        self.assertIn("<html", payload["content_html"])
         self.assertIsNone(receiver.validate(payload["channel"], payload))
         self.assertIn("ADD s_touches", self.table.update_item.call_args.kwargs["UpdateExpression"])
 
