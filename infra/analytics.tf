@@ -32,7 +32,9 @@ locals {
         first_name               = "string"
         last_name                = "string"
         email                    = "string"
+        address                  = "string"
         city                     = "string"
+        postal_code              = "string"
         state                    = "string"
         age                      = "int"
         tenure_months            = "int"
@@ -50,6 +52,9 @@ locals {
         onboarded                = "boolean"
         last_asset               = "string"
         status                   = "string"
+        next_best_action         = "string"
+        next_best_action_time    = "string"
+        no_contact_reason        = "string"
         next_best_asset          = "string"
         next_best_channel        = "string"
         next_best_propensity     = "double"
@@ -93,8 +98,8 @@ locals {
   }
 
   saved_queries = {
-    "1 Next best action for each person" = "SELECT customer_id, first_name, last_name, status, next_best_asset, next_best_channel, next_best_propensity, next_best_expected_value FROM people ORDER BY next_best_expected_value DESC NULLS LAST LIMIT 100;"
-    "2 People by status"                 = "SELECT status, COUNT(*) AS people FROM people GROUP BY status ORDER BY people DESC;"
+    "1 Next best action for each person" = "SELECT customer_id, first_name, last_name, status, next_best_action, next_best_action_time, no_contact_reason, next_best_asset, next_best_propensity, next_best_expected_value FROM people ORDER BY next_best_expected_value DESC NULLS LAST LIMIT 100;"
+    "2 People by status"                 = "SELECT status, next_best_action, COUNT(*) AS people FROM people GROUP BY status, next_best_action ORDER BY people DESC;"
     "3 One customer's history"           = "SELECT h.decided_at, h.touch, h.asset_id, h.channel, h.selection, h.propensity, COALESCE(e.opened, d.opened) AS opened, COALESCE(e.clicked, d.clicked) AS clicked, COALESCE(e.registered, d.registered) AS registered FROM nba_history h LEFT JOIN email_engagement e ON h.message_id = e.message_id LEFT JOIN direct_mail_engagement d ON h.message_id = d.message_id WHERE h.customer_id = (SELECT customer_id FROM people WHERE touches > 1 LIMIT 1) ORDER BY h.decided_at;"
     "4 Email funnel by asset"            = "SELECT asset_id, COUNT(DISTINCT message_id) AS delivered, COUNT(DISTINCT CASE WHEN opened THEN message_id END) AS opened, COUNT(DISTINCT CASE WHEN clicked THEN message_id END) AS clicked, COUNT(DISTINCT CASE WHEN registered THEN message_id END) AS registered FROM email_engagement GROUP BY asset_id ORDER BY registered DESC;"
     "5 Direct mail funnel by asset"      = "SELECT asset_id, COUNT(DISTINCT message_id) AS delivered, COUNT(DISTINCT CASE WHEN clicked THEN message_id END) AS qr_visits, COUNT(DISTINCT CASE WHEN registered THEN message_id END) AS registered FROM direct_mail_engagement GROUP BY asset_id ORDER BY registered DESC;"

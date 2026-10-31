@@ -35,13 +35,14 @@ SELECT channel, asset_id,
 FROM (SELECT * FROM email_engagement UNION ALL SELECT * FROM direct_mail_engagement)
 GROUP BY channel, asset_id ORDER BY registered DESC
 """
+ACTION_SQL = "SELECT next_best_action AS action, COUNT(*) AS people FROM people GROUP BY next_best_action"
 STATUS_SQL = "SELECT status, COUNT(*) AS people FROM people GROUP BY status ORDER BY people DESC"
 NEXT_ACTION_SQL = """
-SELECT next_best_asset AS asset_id, next_best_channel AS channel, COUNT(*) AS people,
+SELECT next_best_asset AS asset_id, next_best_action AS channel, COUNT(*) AS people,
        ROUND(AVG(next_best_propensity), 4) AS avg_propensity,
        ROUND(AVG(next_best_expected_value), 2) AS avg_expected_value
 FROM people WHERE next_best_asset IS NOT NULL
-GROUP BY next_best_asset, next_best_channel ORDER BY people DESC
+GROUP BY next_best_asset, next_best_action ORDER BY people DESC
 """
 TOTALS_SQL = """
 SELECT COUNT(*) AS people,
@@ -62,7 +63,8 @@ GROUP BY image_theme, image_id
 """
 PEOPLE_COLUMNS = (
     "customer_id, first_name, last_name, status, touches, opens, clicks, registered, "
-    "next_best_asset, next_best_channel, next_best_propensity, next_best_expected_value, next_best_image"
+    "next_best_action, next_best_action_time, no_contact_reason, next_best_asset, next_best_channel, "
+    "next_best_propensity, next_best_expected_value, next_best_image"
 )
 HISTORY_SQL = """
 SELECT DISTINCT h.message_id, h.decided_at, h.touch, h.asset_id, h.channel, h.selection, h.propensity,
@@ -188,12 +190,34 @@ def run_query(sql, parameters=None):
     return [dict(zip(header, (cell.get("VarCharValue") for cell in row["Data"]))) for row in rows[1:]]
 
 
+def _endpoints():
+    events_url = os.environ.get("EVENTS_URL", "")
+    receiver = os.environ.get("RECEIVER_URL", "").rstrip("/")
+    return [
+        {"group": "Customer data", "method": "POST", "url": events_url, "auth": "API key", "purpose": "Send one customer event or a batch of up to 100"},
+        {"group": "Dummy receiver", "method": "POST", "url": f"{receiver}/email", "auth": "Bearer token", "purpose": "Receives email requests with HTML. Sends nothing"},
+        {"group": "Dummy receiver", "method": "POST", "url": f"{receiver}/direct-mail", "auth": "Bearer token", "purpose": "Receives direct mail requests with HTML. Sends nothing"},
+        {"group": "Dummy receiver", "method": "GET", "url": f"{receiver}/messages", "auth": "Bearer token", "purpose": "Lists a sample of the requests received"},
+        {"group": "Console", "method": "GET", "url": "/api/overview", "auth": "Password", "purpose": "Totals, registration rate and endpoint library"},
+        {"group": "Console", "method": "GET", "url": "/api/performance", "auth": "Password", "purpose": "Funnels and current next best actions"},
+        {"group": "Console", "method": "GET", "url": "/api/assets", "auth": "Password", "purpose": "Campaign assets and previews"},
+        {"group": "Console", "method": "GET", "url": "/api/content", "auth": "Password", "purpose": "Image library results"},
+        {"group": "Console", "method": "GET", "url": "/api/people", "auth": "Password", "purpose": "Search and filter people"},
+        {"group": "Console", "method": "GET", "url": "/api/people/{id}", "auth": "Password", "purpose": "One person's profile, scores and messages"},
+        {"group": "Console", "method": "GET", "url": "/api/monitoring", "auth": "Password", "purpose": "Queues, functions and alarms"},
+        {"group": "Console", "method": "GET", "url": "/api/usage", "auth": "Password", "purpose": "Services, costs, records and API calls"},
+        {"group": "Console", "method": "GET", "url": "/images/{id}.jpg", "auth": "Public", "purpose": "Library images used in messages"},
+    ]
+
+
 def _overview():
     totals = run_query(TOTALS_SQL)
     return {
         "totals": totals[0] if totals else {},
         "statuses": run_query(STATUS_SQL),
+        "actions": run_query(ACTION_SQL),
         "funnel": run_query(FUNNEL_SQL),
+        "endpoints": _endpoints(),
     }
 
 

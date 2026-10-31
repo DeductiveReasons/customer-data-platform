@@ -12,7 +12,6 @@ from cdp import nba
 
 ENDPOINT_PATHS = {"email": "/email", "direct_mail": "/direct-mail"}
 LEDGER_DAYS = 90
-SCAN_MIN_DAYS_BETWEEN_CONTACTS = 7
 MODEL_CACHE_SECONDS = 300
 _table = None
 _token = None
@@ -145,7 +144,7 @@ def _too_recent(profile, now):
     if profile.get("trigger") != "scan":
         return False
     last_contact = profile.get("state", {}).get("last_contact", 0)
-    return now - last_contact < SCAN_MIN_DAYS_BETWEEN_CONTACTS * 86400
+    return now - last_contact < nba.MIN_DAYS_BETWEEN_SCANS * 86400
 
 
 def _process(profile, table, model):

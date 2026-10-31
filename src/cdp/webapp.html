@@ -72,7 +72,8 @@ a{color:var(--accent)}
 <script>
 const VIEWS={overview:'Overview',performance:'Performance',assets:'Digital assets',content:'Image library',people:'People',monitoring:'Monitoring',usage:'Usage and costs'};
 const STATUSES={active:'Active journey',onboarding_due:'Onboarding due',registered:'Registered',journey_complete:'Journey complete',no_marketing_consent:'No marketing consent',no_contact_option:'No contact option'};
-const LABELS={email:'Email',direct_mail:'Direct mail'};
+const LABELS={email:'Email',direct_mail:'Direct mail',no_contact:'No contact'};
+const when=v=>{if(!v)return '–';const d=new Date(v);return isNaN(d)?v:d.toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})};
 let password=null,currentView='overview',assetNames={};
 try{password=sessionStorage.getItem('pw')}catch(e){}
 const view=document.getElementById('view');
@@ -112,10 +113,13 @@ const render={
    <div class="tile"><b>${num(t.people)}</b><span>People</span></div>
    <div class="tile"><b>${num(t.contacted)}</b><span>Contacted</span></div>
    <div class="tile"><b>${num(t.registered)}</b><span>Registered</span></div>
-   <div class="tile"><b>${pct(t.registered,t.people)}</b><span>Registered, all people</span></div>
+   <div class="tile"><b>${pct(t.registered,t.people)}</b><span>Registration rate, all people</span></div>
+   <div class="tile"><b>${pct(t.registered,t.contacted)}</b><span>Registration rate, contacted</span></div>
    <div class="tile"><b>${num(f.delivered)}</b><span>Messages delivered</span></div>
   </div>
-  <div class="panel"><h2>People by status</h2>${d.statuses.map(s=>`<div class="bar"><span>${esc(STATUSES[s.status]||s.status)}</span><i style="width:${(100*Number(s.people)/max).toFixed(1)}%"></i><em>${num(s.people)}</em></div>`).join('')||'<p class="muted">No people yet.</p>'}</div>`;
+  <div class="panel"><h2>Next best action</h2>${(d.actions||[]).map(a=>`<div class="bar"><span>${esc(LABELS[a.action]||a.action||'Not exported')}</span><i style="width:${(100*Number(a.people)/Math.max(1,Number(t.people))).toFixed(1)}%"></i><em>${num(a.people)}</em></div>`).join('')||'<p class="muted">No people yet.</p>'}</div>
+  <div class="panel"><h2>People by status</h2>${d.statuses.map(s=>`<div class="bar"><span>${esc(STATUSES[s.status]||s.status)}</span><i style="width:${(100*Number(s.people)/max).toFixed(1)}%"></i><em>${num(s.people)}</em></div>`).join('')||'<p class="muted">No people yet.</p>'}</div>
+  <div class="panel"><h2>Endpoint library</h2><p class="muted">The dummy receiver never sends real email or mail. Keys, tokens and passwords are kept in AWS and are not shown here.</p>${table([{t:'Area',k:'group'},{t:'Method',k:'method'},{t:'Endpoint',k:'url'},{t:'Sign-in',k:'auth'},{t:'What it does',k:'purpose'}],d.endpoints||[])}</div>`;
  },
  async performance(){
   const d=await api('/api/performance');
@@ -160,7 +164,7 @@ const render={
   <label>Customer ID <input id="cid" value="${esc(params.customer_id||'')}"></label><button class="small">Search</button></form>
   ${table([{t:'Customer',k:'customer_id'},{t:'Name',f:r=>`${r.first_name||''} ${r.last_name||''}`},{t:'Status',f:r=>STATUSES[r.status]||r.status},
    {t:'Touches',k:'touches',n:1},{t:'Clicks',k:'clicks',n:1},{t:'Registered',f:r=>r.registered==='true'?'Yes':'No'},
-   {t:'Next best asset',f:r=>r.next_best_asset?assetName(r.next_best_asset):'–'},{t:'Channel',f:r=>LABELS[r.next_best_channel]||'–'},{t:'Next image',h:r=>r.next_best_image?`<img class="thumb" src="/images/${esc(r.next_best_image)}.jpg" alt="${esc(r.next_best_image)}">`:'–'},
+   {t:'Next best action',f:r=>LABELS[r.next_best_action]||'–'},{t:'Next action time',f:r=>when(r.next_best_action_time)},{t:'Asset',f:r=>r.next_best_asset?assetName(r.next_best_asset):'–'},{t:'Next image',h:r=>r.next_best_image?`<img class="thumb" src="/images/${esc(r.next_best_image)}.jpg" alt="${esc(r.next_best_image)}">`:'–'},
    {t:'Propensity',n:1,f:r=>r.next_best_propensity?(100*Number(r.next_best_propensity)).toFixed(1)+'%':'–'}],d.people,{link:'customer_id',empty:'No matching people.'})}</div>`;
  },
  async person(params){
@@ -186,14 +190,16 @@ const render={
    ${u.next_best_image?`<figure class="nextimg"><img src="/images/${esc(u.next_best_image)}.jpg" alt="${esc(u.next_best_image_theme||'')} image"><figcaption>Next image: ${esc(u.next_best_image)}</figcaption></figure>`:''}
   </section>
   <div class="tiles">
-   <div class="tile"><b>${u.next_best_asset?esc(assetName(u.next_best_asset)):'None'}</b><span>Next best action${u.next_best_channel?' by '+esc(LABELS[u.next_best_channel]||u.next_best_channel):''}</span></div>
+   <div class="tile"><b>${esc(LABELS[u.next_best_action]||'–')}</b><span>Next best action${u.no_contact_reason?': '+esc(STATUSES[u.no_contact_reason]||u.no_contact_reason):''}</span></div>
+   <div class="tile"><b style="font-size:19px">${esc(when(u.next_best_action_time))}</b><span>Next action time (your local time)</span></div>
+   <div class="tile"><b style="font-size:19px">${u.next_best_asset?esc(assetName(u.next_best_asset)):'None'}</b><span>Next asset</span></div>
    <div class="tile"><b>${p100(u.next_best_propensity)}</b><span>Sign-up propensity</span></div>
    <div class="tile"><b>${u.next_best_expected_value?'$'+Number(u.next_best_expected_value).toFixed(2):'–'}</b><span>Expected value</span></div>
    <div class="tile"><b>${num(u.touches)} / ${num(u.opens)} / ${num(u.clicks)}</b><span>Sent / opened / clicked</span></div>
    <div class="tile"><b>${yn(u.registered)}</b><span>Registered</span></div>
   </div>
   <div class="panel"><h2>Profile</h2><dl class="details">
-   ${detail('Email',u.email)}${detail('Location',[u.city,u.state].filter(Boolean).join(', '))}${detail('Age',u.age)}${detail('Member for',u.tenure_months?u.tenure_months+' months':null)}
+   ${detail('First name',u.first_name)}${detail('Last name',u.last_name)}${detail('Email',u.email)}${detail('Address',[u.address,u.city,u.state,u.postal_code].filter(Boolean).join(', '))}${detail('Age',u.age)}${detail('Member for',u.tenure_months?u.tenure_months+' months':null)}
    ${detail('App sessions, 30 days',u.app_sessions_30d)}${detail('Days since active',u.days_since_active)}${detail('Email open rate',p100(u.email_open_rate))}${detail('Wellness member',u.wellness_member==='1'?'Yes':'No')}
    ${detail('Marketing consent',yn(u.consent_marketing))}${detail('Email consent',yn(u.consent_email))}${detail('Direct mail consent',yn(u.consent_direct_mail))}${detail('Model',u.model_version)}
   </dl></div>
@@ -203,7 +209,7 @@ const render={
     ${m.image_id?`<img class="thumb" src="/images/${esc(m.image_id)}.jpg" alt="${esc(m.image_id)}">`:''}
     <div class="msgbody"><b>${esc(assetName(m.asset_id))}</b> · ${esc(LABELS[m.channel]||m.channel)} · touch ${esc(m.touch)}
      <div class="muted">${esc(m.decided_at||'')} · ${esc(m.selection||'')} · ${esc(m.trigger||'')}</div>
-     <div>Propensity ${p100(m.propensity)} · Image score ${p100(m.content_score)} · ${esc(m.image_theme||'no image')}</div>
+     <div>Communication type: ${esc(LABELS[m.channel]||m.channel)} · Propensity ${p100(m.propensity)} · Image score ${p100(m.content_score)} · ${esc(m.image_theme||'no image')}</div>
      <div>Opened ${m.channel==='direct_mail'?'n/a':yn(m.opened)} · Clicked ${yn(m.clicked)} · Registered ${yn(m.registered)} · Unsubscribed ${yn(m.unsubscribed)}</div></div>
     ${m.content_html?`<button class="small" data-view="${i}">View</button>`:''}
     <iframe id="msg${i}" hidden sandbox title="Message ${esc(m.touch)} content" class="msgframe"></iframe></article>`).join(''):'<p class="muted">No messages sent to this person.</p>'}</div>`;

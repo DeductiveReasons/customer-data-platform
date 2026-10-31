@@ -3,6 +3,7 @@ import json
 import math
 import os
 import random
+from datetime import datetime, timedelta, timezone
 
 from cdp import assets, content
 
@@ -27,6 +28,10 @@ PROFILE_FEATURES = FEATURES[:6]
 REGISTRATION_VALUE = 120.0
 CHANNEL_COST = {"email": 0.02, "direct_mail": 1.25}
 MAX_TOUCHES = 4
+MIN_DAYS_BETWEEN_SCANS = 7
+# Standard-time UTC offsets, so these times can be an hour off during daylight saving time.
+STATE_UTC_OFFSET = {"CA": -8, "WA": -8, "CO": -7, "TX": -6, "IL": -6, "NY": -5, "FL": -5, "OH": -5}
+DEFAULT_UTC_OFFSET = -5
 EXPLORATION_RATE = 0.1  # Keeps collecting evidence on assets the model does not currently favor.
 
 
@@ -40,6 +45,35 @@ def features_for(traits, state, channel):
     values["clicks"] = float(state.get("clicks", 0))
     values["is_direct_mail"] = 1.0 if channel == "direct_mail" else 0.0
     return values
+
+
+def send_hour(traits, channel):
+    """Rule for the best local hour. This is a starting rule, not a learned timing model."""
+    if channel == "direct_mail":
+        return 10
+    if isinstance(traits.get("email_open_rate"), (int, float)) and traits["email_open_rate"] >= 0.4:
+        return 8
+    if isinstance(traits.get("app_sessions_30d"), (int, float)) and traits["app_sessions_30d"] >= 5:
+        return 18
+    return 12
+
+
+def next_action_time(traits, state, channel, now=None):
+    """Return the next allowed send time in UTC: after the contact gap, at the person's best local hour."""
+    now = now or datetime.now(timezone.utc)
+    earliest = now
+    if state.get("last_contact"):
+        last_contact = datetime.fromtimestamp(float(state["last_contact"]), timezone.utc)
+        earliest = max(now, last_contact + timedelta(days=MIN_DAYS_BETWEEN_SCANS))
+    local_zone = timezone(timedelta(hours=STATE_UTC_OFFSET.get(traits.get("state"), DEFAULT_UTC_OFFSET)))
+    local = earliest.astimezone(local_zone)
+    candidate = local.replace(hour=send_hour(traits, channel), minute=0, second=0, microsecond=0)
+    if candidate < local:
+        candidate += timedelta(days=1)
+    # Mail goes out on weekdays only.
+    while channel == "direct_mail" and candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate.astimezone(timezone.utc).isoformat()
 
 
 def propensity(model, asset_id, features):

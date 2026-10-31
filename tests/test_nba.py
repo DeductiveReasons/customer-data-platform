@@ -6,6 +6,7 @@ import random
 import sys
 import types
 import unittest
+from datetime import datetime, timezone
 from unittest import mock
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -447,6 +448,24 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual({f["itemIdentifier"] for f in result["batchItemFailures"]}, {"1", "2"})
 
 
+class NextActionTimeTests(unittest.TestCase):
+    NOW = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)  # A Wednesday, 5am in California.
+
+    def test_uses_the_best_local_hour(self):
+        result = nba.next_action_time({"state": "CA", "email_open_rate": 0.6}, {}, "email", self.NOW)
+        self.assertEqual(result, "2026-10-28T16:00:00+00:00")
+
+    def test_waits_for_the_contact_gap(self):
+        last = self.NOW.timestamp()
+        result = nba.next_action_time({"state": "NY", "email_open_rate": 0.1}, {"last_contact": last}, "email", self.NOW)
+        self.assertEqual(result, "2026-11-04T17:00:00+00:00")
+
+    def test_mail_skips_weekends(self):
+        saturday = datetime(2026, 10, 31, 12, 0, tzinfo=timezone.utc)
+        result = nba.next_action_time({"state": "NY"}, {}, "direct_mail", saturday)
+        self.assertEqual(result, "2026-11-02T15:00:00+00:00")
+
+
 class ExportTests(unittest.TestCase):
     def item(self, **attrs):
         base = {"pk": "CUSTOMER#c1", "sk": "PROFILE"}
@@ -461,11 +480,19 @@ class ExportTests(unittest.TestCase):
     def test_person_row_shows_next_best_action(self):
         row = self.row()
         self.assertEqual(row["status"], "active")
+        self.assertIn(row["next_best_action"], ("email", "direct_mail"))
+        self.assertTrue(row["next_best_action_time"])
+        self.assertEqual(row["address"], "1 Sample St")
+        self.assertIsNone(row["no_contact_reason"])
         self.assertIn(row["next_best_asset"], assets.SIGNUP_ASSETS)
         self.assertIsNotNone(row["next_best_propensity"])
 
     def test_statuses(self):
         self.assertEqual(self.row(c_marketing=False)["status"], "no_marketing_consent")
+        blocked = self.row(c_marketing=False)
+        self.assertEqual(blocked["next_best_action"], "no_contact")
+        self.assertEqual(blocked["no_contact_reason"], "no_marketing_consent")
+        self.assertIsNone(blocked["next_best_action_time"])
         self.assertEqual(self.row(s_touches=nba.MAX_TOUCHES)["status"], "journey_complete")
         self.assertEqual(self.row(s_registered=True)["status"], "onboarding_due")
         self.assertEqual(self.row(s_registered=True, s_onboarded=True)["status"], "registered")
