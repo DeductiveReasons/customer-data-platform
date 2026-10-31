@@ -32,6 +32,7 @@ locals {
         MODEL_BUCKET        = aws_s3_bucket.raw.bucket
         MODEL_KEY           = local.model_key
         ARCHIVE_QUEUE_URL   = aws_sqs_queue.archive.url
+        CONTENT_BASE_URL    = aws_apigatewayv2_api.webapp.api_endpoint
       }
       policy = jsonencode([
         {

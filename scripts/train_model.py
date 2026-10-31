@@ -7,7 +7,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
-from cdp import nba, training  # noqa: E402
+from cdp import content, nba, training  # noqa: E402
 from journey import RandomPolicyRng, run  # noqa: E402
 from sample_data import generate  # noqa: E402
 
@@ -20,6 +20,7 @@ def uniform_model():
         "means": [0.0] * len(nba.FEATURES),
         "stds": [1.0] * len(nba.FEATURES),
         "actions": {a: {"intercept": 0.0, "weights": [0.0] * len(nba.FEATURES)} for a in nba.assets.SIGNUP_ASSETS},
+        "content": content.uniform_model(),
     }
 
 
@@ -30,10 +31,16 @@ def main():
     print(json.dumps(report, indent=2))
     if model is None:
         raise SystemExit("training produced no model")
-    path = os.path.join(HERE, "..", "src", "cdp", "nba_model.json")
-    with open(path, "w") as output:
-        json.dump(model, output, indent=2)
-        output.write("\n")
+    content_model, content_report = training.train(
+        records, content.FEATURES, "synthetic-v1", key="image_theme", label="clicked"
+    )
+    print(json.dumps(content_report, indent=2))
+    if content_model is None:
+        raise SystemExit("content training produced no model")
+    for name, data in (("nba_model.json", model), ("content_model.json", content_model)):
+        with open(os.path.join(HERE, "..", "src", "cdp", name), "w") as output:
+            json.dump(data, output, indent=2)
+            output.write("\n")
 
 
 if __name__ == "__main__":

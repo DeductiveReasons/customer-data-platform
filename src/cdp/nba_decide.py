@@ -83,11 +83,11 @@ def _claim(table, message):
 def _record_send(table, message, now):
     key = {"pk": f"CUSTOMER#{message['customer_id']}", "sk": "PROFILE"}
     if message["asset_id"] == nba.assets.ONBOARDING:
-        update = "SET s_onboarded = :yes, s_last_contact = :now"
-        values = {":yes": True, ":now": now}
+        update = "SET s_onboarded = :yes, s_last_contact = :now, s_last_image = :image"
+        values = {":yes": True, ":now": now, ":image": message["image_id"]}
     else:
-        update = "SET s_last_asset = :asset, s_last_contact = :now ADD s_touches :one"
-        values = {":asset": message["asset_id"], ":now": now, ":one": 1}
+        update = "SET s_last_asset = :asset, s_last_contact = :now, s_last_image = :image ADD s_touches :one"
+        values = {":asset": message["asset_id"], ":now": now, ":image": message["image_id"], ":one": 1}
     table.update_item(Key=key, UpdateExpression=update, ExpressionAttributeValues=values)
 
 
@@ -124,6 +124,10 @@ def _log_decision(message, trigger):
         "propensity",
         "expected_value",
         "model_version",
+        "image_id",
+        "image_theme",
+        "content_selection",
+        "content_score",
     )
     row = {field: message.get(field) for field in fields}
     row.update({"trigger": trigger, "decided_at": datetime.now(timezone.utc).isoformat()})

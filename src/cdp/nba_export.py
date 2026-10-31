@@ -59,6 +59,8 @@ def person_row(item, snapshot_at, model):
         "next_best_channel": decision["channel"] if decision else None,
         "next_best_propensity": decision.get("propensity") if decision else None,
         "next_best_expected_value": decision.get("expected_value") if decision else None,
+        "next_best_image": decision["image_id"] if decision else None,
+        "next_best_image_theme": decision["image_theme"] if decision else None,
         "model_version": model["version"],
         "snapshot_at": snapshot_at,
     }

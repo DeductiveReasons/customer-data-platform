@@ -34,6 +34,8 @@ tr.link{cursor:pointer}tr.link:hover{background:var(--accent-soft)}
 .bar i{display:block;height:13px;background:var(--accent);border-radius:3px;min-width:2px}
 .bar em{font-style:normal;text-align:right;font-variant-numeric:tabular-nums}
 .assets{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px}
+.images{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:12px}.images figure{margin:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}.images img{display:block;width:100%;aspect-ratio:2/1}.images figcaption{padding:7px 9px;font-size:12px;color:var(--muted)}.images figcaption b{display:block;color:var(--text);font-size:13px}.thumb{width:72px;aspect-ratio:2/1;display:block;border-radius:4px}
+.profile{display:flex;flex-wrap:wrap;gap:16px;align-items:center}.avatar{width:84px;height:84px;border-radius:50%;display:grid;place-items:center;color:#fff;font-size:30px;font-weight:700;flex:none}.who{flex:1;min-width:210px}.who h1{margin:0}.who p{margin:2px 0}.nextimg{margin:0;width:190px;max-width:100%}.nextimg img{width:100%;aspect-ratio:2/1;object-fit:cover;border-radius:6px;display:block}.nextimg figcaption{font-size:12px;color:var(--muted)}.details{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px 18px;margin:0}.details dt{color:var(--muted);font-size:13px}.details dd{margin:0}.msg{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;padding:11px 0;border-top:1px solid var(--line);font-size:14px}.msgbody{flex:1;min-width:230px}.msgframe{width:100%;height:430px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .asset iframe{width:100%;height:340px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .asset h2{margin-bottom:2px}
 .tag{display:inline-block;background:var(--accent-soft);border-radius:5px;padding:0 7px;font-size:12px}
@@ -68,7 +70,7 @@ a{color:var(--accent)}
   <main id="view" tabindex="-1"></main>
 </div>
 <script>
-const VIEWS={overview:'Overview',performance:'Performance',assets:'Digital assets',people:'People',monitoring:'Monitoring'};
+const VIEWS={overview:'Overview',performance:'Performance',assets:'Digital assets',content:'Image library',people:'People',monitoring:'Monitoring',usage:'Usage and costs'};
 const STATUSES={active:'Active journey',onboarding_due:'Onboarding due',registered:'Registered',journey_complete:'Journey complete',no_marketing_consent:'No marketing consent',no_contact_option:'No contact option'};
 const LABELS={email:'Email',direct_mail:'Direct mail'};
 let password=null,currentView='overview',assetNames={};
@@ -138,6 +140,14 @@ const render={
     <div class="seg"><button class="small on" data-ch="email">Email</button><button class="small" data-ch="direct_mail">Direct mail</button></div>
     <iframe sandbox title="${esc(a.name)} preview" srcdoc="${esc(a.email_html)}"></iframe></article>`}).join('')}</div>`;
  },
+ async content(){
+  const d=await api('/api/content');
+  const themes={};d.images.forEach(i=>{const t=themes[i.theme]=themes[i.theme]||{label:i.label,tone:i.tone,delivered:0,clicked:0,registered:0};t.delivered+=i.delivered;t.clicked+=i.clicked;t.registered+=i.registered});
+  const rows=Object.values(themes).sort((a,b)=>(b.clicked/(b.delivered||1))-(a.clicked/(a.delivered||1)));
+  return `<h1>Image library</h1><p class="sub">${d.images.length} AI-generated sample images in ${rows.length} themes. A model picks the theme for each person, and results are simulated.</p>
+  <div class="panel"><h2>Results by theme</h2>${table([{t:'Theme',k:'label'},{t:'Tone',k:'tone'},{t:'Delivered',n:1,f:r=>num(r.delivered)},{t:'Click rate',n:1,f:r=>pct(r.clicked,r.delivered)},{t:'Registered',n:1,f:r=>num(r.registered)}],rows)}</div>
+  <div class="images">${d.images.map(i=>`<figure><img loading="lazy" src="/images/${esc(i.id)}.jpg" alt="${esc(i.label)} image"><figcaption><b>${esc(i.id)}</b>${num(i.delivered)} sent · ${pct(i.clicked,i.delivered)} clicked</figcaption></figure>`).join('')}</div>`;
+ },
  async people(params={}){
   const q=new URLSearchParams();if(params.status)q.set('status',params.status);if(params.customer_id)q.set('customer_id',params.customer_id);
   const d=await api('/api/people?'+q);
@@ -150,16 +160,70 @@ const render={
   <label>Customer ID <input id="cid" value="${esc(params.customer_id||'')}"></label><button class="small">Search</button></form>
   ${table([{t:'Customer',k:'customer_id'},{t:'Name',f:r=>`${r.first_name||''} ${r.last_name||''}`},{t:'Status',f:r=>STATUSES[r.status]||r.status},
    {t:'Touches',k:'touches',n:1},{t:'Clicks',k:'clicks',n:1},{t:'Registered',f:r=>r.registered==='true'?'Yes':'No'},
-   {t:'Next best asset',f:r=>r.next_best_asset?assetName(r.next_best_asset):'–'},{t:'Channel',f:r=>LABELS[r.next_best_channel]||'–'},
+   {t:'Next best asset',f:r=>r.next_best_asset?assetName(r.next_best_asset):'–'},{t:'Channel',f:r=>LABELS[r.next_best_channel]||'–'},{t:'Next image',h:r=>r.next_best_image?`<img class="thumb" src="/images/${esc(r.next_best_image)}.jpg" alt="${esc(r.next_best_image)}">`:'–'},
    {t:'Propensity',n:1,f:r=>r.next_best_propensity?(100*Number(r.next_best_propensity)).toFixed(1)+'%':'–'}],d.people,{link:'customer_id',empty:'No matching people.'})}</div>`;
  },
  async person(params){
   const d=await api('/api/people/'+encodeURIComponent(params.id));
-  view._after=()=>{document.getElementById('back').onclick=()=>show('people')};
   const yn=v=>v==='true'?'Yes':v==='false'?'No':'–';
-  return `<button class="small" id="back">Back to people</button><h1 style="margin-top:12px">${esc(params.id)}</h1><p class="sub">Message and engagement history. Engagement is simulated.</p>
-  <div class="panel">${table([{t:'Sent',k:'decided_at'},{t:'Touch',k:'touch'},{t:'Asset',f:r=>assetName(r.asset_id)},{t:'Channel',f:r=>LABELS[r.channel]||r.channel},
-   {t:'Selection',k:'selection'},{t:'Trigger',k:'trigger'},{t:'Opened',f:r=>r.channel==='direct_mail'?'n/a':yn(r.opened)},{t:'Clicked',f:r=>yn(r.clicked)},{t:'Registered',f:r=>yn(r.registered)},{t:'Unsubscribed',f:r=>yn(r.unsubscribed)}],d.history,{empty:'No messages sent to this person.'})}</div>`;
+  const p100=v=>v==null||v===''?'–':(100*Number(v)).toFixed(1)+'%';
+  const back='<button class="small" id="back">Back to people</button>';
+  view._after=()=>{document.getElementById('back').onclick=()=>show('people');
+   document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{
+    const m=d.history[Number(b.dataset.view)],f=document.getElementById('msg'+b.dataset.view);
+    f.hidden=!f.hidden;b.textContent=f.hidden?'View':'Hide';if(!f.hidden&&!f.srcdoc)f.srcdoc=m.content_html})};
+  if(!d.profile)return `${back}<div class="panel" style="margin-top:12px"><p>No profile found for ${esc(params.id)}.</p></div>`;
+  const u=d.profile,name=`${u.first_name||''} ${u.last_name||''}`.trim()||'Unknown';
+  const initials=name.split(/\s+/).map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  const hue=[...String(u.customer_id)].reduce((a,c)=>(a*31+c.charCodeAt(0))%360,7);
+  const detail=(k,v)=>`<div><dt>${esc(k)}</dt><dd>${esc(v??'–')}</dd></div>`;
+  const best=d.offers[0];
+  return `${back}
+  <section class="panel profile" style="margin-top:12px">
+   <div class="avatar" role="img" aria-label="Avatar for ${esc(name)}" style="background:hsl(${hue} 55% 38%)">${esc(initials)}</div>
+   <div class="who"><h1>${esc(name)}</h1><p class="muted">${esc(u.customer_id)} · ${esc(STATUSES[u.status]||u.status)}</p>
+    <p class="muted">Simulated person. Avatar is generated from their initials.</p></div>
+   ${u.next_best_image?`<figure class="nextimg"><img src="/images/${esc(u.next_best_image)}.jpg" alt="${esc(u.next_best_image_theme||'')} image"><figcaption>Next image: ${esc(u.next_best_image)}</figcaption></figure>`:''}
+  </section>
+  <div class="tiles">
+   <div class="tile"><b>${u.next_best_asset?esc(assetName(u.next_best_asset)):'None'}</b><span>Next best action${u.next_best_channel?' by '+esc(LABELS[u.next_best_channel]||u.next_best_channel):''}</span></div>
+   <div class="tile"><b>${p100(u.next_best_propensity)}</b><span>Sign-up propensity</span></div>
+   <div class="tile"><b>${u.next_best_expected_value?'$'+Number(u.next_best_expected_value).toFixed(2):'–'}</b><span>Expected value</span></div>
+   <div class="tile"><b>${num(u.touches)} / ${num(u.opens)} / ${num(u.clicks)}</b><span>Sent / opened / clicked</span></div>
+   <div class="tile"><b>${yn(u.registered)}</b><span>Registered</span></div>
+  </div>
+  <div class="panel"><h2>Profile</h2><dl class="details">
+   ${detail('Email',u.email)}${detail('Location',[u.city,u.state].filter(Boolean).join(', '))}${detail('Age',u.age)}${detail('Member for',u.tenure_months?u.tenure_months+' months':null)}
+   ${detail('App sessions, 30 days',u.app_sessions_30d)}${detail('Days since active',u.days_since_active)}${detail('Email open rate',p100(u.email_open_rate))}${detail('Wellness member',u.wellness_member==='1'?'Yes':'No')}
+   ${detail('Marketing consent',yn(u.consent_marketing))}${detail('Email consent',yn(u.consent_email))}${detail('Direct mail consent',yn(u.consent_direct_mail))}${detail('Model',u.model_version)}
+  </dl></div>
+  <div class="panel"><h2>Offer propensity scores, right now</h2>${table([{t:'Asset',f:r=>assetName(r.asset_id)},{t:'Channel',f:r=>LABELS[r.channel]||r.channel},{t:'Sign-up propensity',n:1,f:r=>p100(r.propensity)},{t:'Expected value',n:1,f:r=>'$'+Number(r.expected_value).toFixed(2)}],d.offers,{empty:'No scores, because this person has not given consent for any channel.'})}</div>
+  <div class="panel"><h2>Image theme scores, right now</h2>${d.themes.map(t=>`<div class="bar"><span>${esc(t.label)}</span><i style="width:${(100*t.click_score/Math.max(.001,d.themes[0].click_score)).toFixed(1)}%"></i><em>${p100(t.click_score)}</em></div>`).join('')}</div>
+  <div class="panel"><h2>Previous messages</h2>${d.history.length?d.history.map((m,i)=>`<article class="msg">
+    ${m.image_id?`<img class="thumb" src="/images/${esc(m.image_id)}.jpg" alt="${esc(m.image_id)}">`:''}
+    <div class="msgbody"><b>${esc(assetName(m.asset_id))}</b> · ${esc(LABELS[m.channel]||m.channel)} · touch ${esc(m.touch)}
+     <div class="muted">${esc(m.decided_at||'')} · ${esc(m.selection||'')} · ${esc(m.trigger||'')}</div>
+     <div>Propensity ${p100(m.propensity)} · Image score ${p100(m.content_score)} · ${esc(m.image_theme||'no image')}</div>
+     <div>Opened ${m.channel==='direct_mail'?'n/a':yn(m.opened)} · Clicked ${yn(m.clicked)} · Registered ${yn(m.registered)} · Unsubscribed ${yn(m.unsubscribed)}</div></div>
+    ${m.content_html?`<button class="small" data-view="${i}">View</button>`:''}
+    <iframe id="msg${i}" hidden sandbox title="Message ${esc(m.touch)} content" class="msgframe"></iframe></article>`).join(''):'<p class="muted">No messages sent to this person.</p>'}</div>`;
+ },
+ async usage(){
+  const d=await api('/api/usage'),r=d.records||{};
+  const money=v=>'$'+Number(v||0).toFixed(Number(v)>0&&Number(v)<1?4:2);
+  const size=b=>b>=1048576?(b/1048576).toFixed(1)+' MB':b>=1024?(b/1024).toFixed(0)+' KB':num(b)+' B';
+  const missing=d.unavailable.length?`<div class="notice" role="status">Not available right now: ${esc(d.unavailable.join(', '))}.</div>`:'';
+  const files=d.storage.reduce((s,a)=>s+a.files,0),bytes=d.storage.reduce((s,a)=>s+a.bytes,0);
+  return `<h1>Usage and costs</h1><p class="sub">Costs cover the whole AWS account${d.costs_from?` since ${esc(d.costs_from)}`:''} and can lag by up to a day. Activity covers the last ${d.activity_days} days.</p>${missing}
+  <div class="tiles"><div class="tile"><b>${money(d.total_cost)}</b><span>Cost this month, of $50 budget</span></div>
+  <div class="tile"><b>${num(r.people)}</b><span>People</span></div>
+  <div class="tile"><b>${num(r.messages_sent)}</b><span>Messages sent (simulated)</span></div>
+  <div class="tile"><b>${num(Number(r.email_outcomes||0)+Number(r.direct_mail_outcomes||0))}</b><span>Engagement records</span></div>
+  <div class="tile"><b>${size(bytes)}</b><span>Stored in S3, ${num(files)} files</span></div></div>
+  <div class="panel"><h2>Services and cost this month</h2>${table([{t:'Service',k:'name'},{t:'Used for',k:'purpose'},{t:'Cost',n:1,f:s=>money(s.cost)}],d.services)}</div>
+  <div class="panel"><h2>Records</h2>${table([{t:'Table',k:'t'},{t:'Records',n:1,f:x=>num(x.n)}],[{t:'people',n:r.people},{t:'nba_history',n:r.messages_sent},{t:'email_engagement',n:r.email_outcomes},{t:'direct_mail_engagement',n:r.direct_mail_outcomes},{t:'Image library',n:d.image_count}])}</div>
+  <div class="panel"><h2>API calls and activity</h2>${table([{t:'Activity',k:'name'},{t:'Count',n:1,f:x=>num(x.count)}],d.activity)}</div>
+  <div class="panel"><h2>S3 storage</h2>${table([{t:'Area',k:'area'},{t:'Files',n:1,f:x=>num(x.files)},{t:'Size',n:1,f:x=>size(x.bytes)}],d.storage)}</div>`;
  },
  async monitoring(){
   const d=await api('/api/monitoring');

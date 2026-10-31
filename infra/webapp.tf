@@ -67,7 +67,7 @@ resource "aws_iam_role_policy" "webapp" {
       {
         Effect   = "Allow"
         Action   = "s3:GetObject"
-        Resource = [for p in local.webapp_read_prefixes : "${aws_s3_bucket.raw.arn}/${p}*"]
+        Resource = [for p in concat(local.webapp_read_prefixes, ["content-library/", "models/"]) : "${aws_s3_bucket.raw.arn}/${p}*"]
       },
       {
         Effect   = "Allow"
@@ -82,6 +82,11 @@ resource "aws_iam_role_policy" "webapp" {
       {
         Effect   = "Allow"
         Action   = ["cloudwatch:DescribeAlarms", "cloudwatch:GetMetricData"]
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = "ce:GetCostAndUsage"
         Resource = "*"
       },
       {
@@ -111,11 +116,17 @@ resource "aws_lambda_function" "webapp" {
 
   environment {
     variables = {
-      SECRET_ARN       = aws_secretsmanager_secret.webapp.arn
-      ATHENA_WORKGROUP = aws_athena_workgroup.analytics.name
-      ATHENA_DATABASE  = aws_glue_catalog_database.analytics.name
-      RESOURCE_PREFIX  = var.name
-      QUEUES           = jsonencode(local.webapp_queues)
+      SECRET_ARN        = aws_secretsmanager_secret.webapp.arn
+      ATHENA_WORKGROUP  = aws_athena_workgroup.analytics.name
+      ATHENA_DATABASE   = aws_glue_catalog_database.analytics.name
+      RESOURCE_PREFIX   = var.name
+      IMAGE_BUCKET      = aws_s3_bucket.raw.bucket
+      REST_API_NAME     = aws_api_gateway_rest_api.api.name
+      RECEIVER_API_ID   = aws_apigatewayv2_api.receiver.id
+      MODEL_KEY         = local.model_key
+      WEBAPP_API_ID     = aws_apigatewayv2_api.webapp.id
+      STATE_MACHINE_ARN = local.state_machine_arn
+      QUEUES            = jsonencode(local.webapp_queues)
       FUNCTIONS = jsonencode(concat(
         [for f in aws_lambda_function.fn : f.function_name],
         [aws_lambda_function.receiver.function_name, aws_lambda_function.export.function_name],

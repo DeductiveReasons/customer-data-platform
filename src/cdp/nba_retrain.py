@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import boto3
 
-from cdp import nba, training
+from cdp import content, nba, training
 
 MAX_ROWS = 40_000
 
@@ -40,9 +40,17 @@ def handler(_event, _context):
 
     records = load_records(s3, bucket, os.environ["FEEDBACK_PREFIX"])
     version = "feedback-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    model, report = training.train(records, nba.FEATURES, version, previous=_current_model(s3, bucket, key))
+    current = _current_model(s3, bucket, key)
+    model, report = training.train(records, nba.FEATURES, version, previous=current)
+    previous_content = current.get("content") or content.BUNDLED_MODEL
+    content_model, content_report = training.train(
+        records, content.FEATURES, version, previous=previous_content, key="image_theme", label="clicked"
+    )
+    report = {"assets": report, "content": content_report}
     print(json.dumps({"rows": len(records), "report": report}))
-    if model is None:
+    if model is None and content_model is None:
         return {"published": False, "rows": len(records), "report": report}
+    model = model or current
+    model["content"] = content_model or previous_content
     s3.put_object(Bucket=bucket, Key=key, Body=json.dumps(model).encode(), ContentType="application/json")
     return {"published": True, "version": version, "rows": len(records), "report": report}

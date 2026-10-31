@@ -11,7 +11,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
-from cdp import nba, training  # noqa: E402
+from cdp import content, nba, training  # noqa: E402
 from journey import RandomPolicyRng, run  # noqa: E402
 from sample_data import generate  # noqa: E402
 from train_model import uniform_model  # noqa: E402
@@ -37,6 +37,10 @@ def main():
 
     records, first = run(population, nba.BUNDLED_MODEL, random.Random(3))
     show("Starting model", first, people)
+
+    random_content = {**nba.BUNDLED_MODEL, "content": content.uniform_model()}
+    _, even = run(population, random_content, random.Random(3))
+    show("Same assets, untrained images", even, people)
 
     # The next round trains on the feedback from the starting model's own campaign.
     retrained, report = training.train(records, nba.FEATURES, "feedback-demo", previous=nba.BUNDLED_MODEL)

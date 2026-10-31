@@ -86,6 +86,9 @@ def training_record(feedback):
         "features": feedback["features"],
         "model_version": feedback.get("model_version"),
         "selection": feedback.get("selection"),
+        "image_id": feedback.get("image_id"),
+        "image_theme": feedback.get("image_theme"),
+        "content_selection": feedback.get("content_selection"),
         "feedback_at": datetime.now(timezone.utc).isoformat(),
         **feedback["outcome"],
     }

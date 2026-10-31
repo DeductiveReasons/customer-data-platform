@@ -52,10 +52,20 @@ def run(population, model, rng):
                 totals["onboarded"] += 1
                 continue
 
-            outcome = simulator.outcome_for(message["message_id"], message["asset_id"], message["features"])
-            records.append({"asset_id": message["asset_id"], "features": message["features"], **outcome})
+            outcome = simulator.outcome_for(
+                message["message_id"], message["asset_id"], message["features"], message["image_theme"]
+            )
+            records.append(
+                {
+                    "asset_id": message["asset_id"],
+                    "image_theme": message["image_theme"],
+                    "features": message["features"],
+                    **outcome,
+                }
+            )
             state["touches"] = state.get("touches", 0) + 1
             state["last_asset"] = message["asset_id"]
+            state["last_image"] = message["image_id"]
             state["opens"] = state.get("opens", 0) + int(outcome["opened"])
             state["clicks"] = state.get("clicks", 0) + int(outcome["clicked"])
             if outcome["registered"]:

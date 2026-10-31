@@ -14,6 +14,8 @@ locals {
     channel       = "string"
     selection     = "string"
     model_version = "string"
+    image_id      = "string"
+    image_theme   = "string"
     opened        = "boolean"
     clicked       = "boolean"
     registered    = "boolean"
@@ -52,6 +54,8 @@ locals {
         next_best_channel        = "string"
         next_best_propensity     = "double"
         next_best_expected_value = "double"
+        next_best_image          = "string"
+        next_best_image_theme    = "string"
         model_version            = "string"
         snapshot_at              = "string"
       }
@@ -69,6 +73,9 @@ locals {
         propensity     = "double"
         expected_value = "double"
         model_version  = "string"
+        image_id       = "string"
+        image_theme    = "string"
+        content_score  = "double"
         trigger        = "string"
         decided_at     = "string"
       }

@@ -78,7 +78,19 @@ def validate(channel, message):
 
 
 def _send_feedback(message, outcome):
-    fields = ("message_id", "customer_id", "touch", "channel", "asset_id", "features", "model_version", "selection")
+    fields = (
+        "message_id",
+        "customer_id",
+        "touch",
+        "channel",
+        "asset_id",
+        "features",
+        "model_version",
+        "selection",
+        "image_id",
+        "image_theme",
+        "content_selection",
+    )
     feedback = {field: message.get(field) for field in fields}
     _get_sqs().send_message(
         QueueUrl=os.environ["FEEDBACK_QUEUE_URL"],
@@ -103,7 +115,9 @@ def _receive(event, channel):
     # Onboarding is sent after the sign-up goal is met, so there is no outcome left to simulate.
     outcome = None
     if message["asset_id"] != ONBOARDING:
-        outcome = simulator.outcome_for(message["message_id"], message["asset_id"], message["features"])
+        outcome = simulator.outcome_for(
+            message["message_id"], message["asset_id"], message["features"], message.get("image_theme")
+        )
 
     stored = json.loads(json.dumps({**message, "outcome": outcome}), parse_float=Decimal)
     # message_id is the key, so a retried request overwrites its earlier copy.

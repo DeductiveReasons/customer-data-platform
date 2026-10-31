@@ -30,7 +30,7 @@ def cta_url(asset_id, message_id):
     return f"https://{BRAND['domain']}/join?{query}"
 
 
-def render(asset_id, channel, first_name, message_id):
+def render(asset_id, channel, first_name, message_id, image_url=None, image_alt=""):
     asset = ASSETS[asset_id]
     name = html.escape(str(first_name or "there"))
     url = html.escape(cta_url(asset_id, message_id), quote=True)
@@ -40,8 +40,11 @@ def render(asset_id, channel, first_name, message_id):
     else:
         action = f"<p><strong>{html.escape(asset['cta'])}:</strong> scan the code or visit {url}</p>"
         opt_out = f"To stop receiving mail, visit {BRAND['domain']}/mail-preferences."
+    hero = _hero(asset)
+    if image_url:
+        hero = f'<img src="{html.escape(image_url, quote=True)}" alt="{html.escape(image_alt, quote=True)}" style="width:100%;max-width:600px;height:auto">'
     return (
-        f"<html><body>{_hero(asset)}"
+        f"<html><body>{hero}"
         f"<h1>{html.escape(asset['headline'])}</h1>"
         f"<p>Hi {name},</p><p>{html.escape(asset['body'])}</p>{action}"
         f"<p><small>{opt_out} {html.escape(BRAND['disclaimer'])}</small></p>"

@@ -59,13 +59,13 @@ def _scaling(rows):
     return means, stds
 
 
-def train(records, features, version, previous=None, seed=7):
-    """Train one model per asset from records of {asset_id, features, registered}.
+def train(records, features, version, previous=None, seed=7, key="asset_id", label="registered"):
+    """Train one model per key value from records of {key, features, label}.
 
     Assets without enough data or signal keep their previous weights.
     Returns (model, report), where model is None if no asset could be trained.
     """
-    records = list(records)
+    records = [r for r in records if r.get(key)]
     random.Random(seed).shuffle(records)
     matrix = [[float(r["features"].get(name, 0)) for name in features] for r in records]
     if not matrix:
@@ -75,7 +75,7 @@ def train(records, features, version, previous=None, seed=7):
 
     by_asset = {}
     for record, row in zip(records, scaled):
-        by_asset.setdefault(record["asset_id"], []).append((row, int(bool(record["registered"]))))
+        by_asset.setdefault(record[key], []).append((row, int(bool(record[label]))))
 
     actions = {}
     report = {}

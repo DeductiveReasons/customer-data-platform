@@ -4,7 +4,7 @@ import math
 import os
 import random
 
-from cdp import assets
+from cdp import assets, content
 
 with open(os.path.join(os.path.dirname(__file__), "nba_model.json")) as model_file:
     BUNDLED_MODEL = json.load(model_file)
@@ -82,11 +82,15 @@ def _recipient(channel, traits):
     }
 
 
-def _message(customer_id, asset_id, channel, traits, state, model, choice):
+def _message(customer_id, asset_id, channel, traits, state, model, choice, rng):
     touch = "onboarding" if asset_id == assets.ONBOARDING else str(state.get("touches", 0) + 1)
     message_id = f"{customer_id}-{touch}"
+    features = {k: (0.0 if v is None else v) for k, v in features_for(traits, state, channel).items()}
+    image = content.choose(customer_id, touch, features, state, model.get("content") or content.BUNDLED_MODEL, rng)
+    alt = content.THEMES[image["image_theme"]]["label"]
     return {
         **choice,
+        **image,
         "message_id": message_id,
         "customer_id": customer_id,
         "touch": touch,
@@ -95,9 +99,11 @@ def _message(customer_id, asset_id, channel, traits, state, model, choice):
         "channel": channel,
         "model_version": model["version"],
         "subject": assets.ASSETS[asset_id]["subject"],
-        "content_html": assets.render(asset_id, channel, traits.get("first_name"), message_id),
+        "content_html": assets.render(
+            asset_id, channel, traits.get("first_name"), message_id, content.image_url(image["image_id"]), alt
+        ),
         "recipient": _recipient(channel, traits),
-        "features": {k: (0.0 if v is None else v) for k, v in features_for(traits, state, channel).items()},
+        "features": features,
     }
 
 
@@ -112,7 +118,7 @@ def decide(customer_id, traits, consent, state, model=None, rng=random):
         if state.get("onboarded"):
             return None
         return _message(
-            customer_id, assets.ONBOARDING, channels[0], traits, state, model, {"selection": "onboarding"}
+            customer_id, assets.ONBOARDING, channels[0], traits, state, model, {"selection": "onboarding"}, rng
         )
 
     if state.get("touches", 0) >= MAX_TOUCHES:
@@ -139,4 +145,4 @@ def decide(customer_id, traits, consent, state, model=None, rng=random):
             return None
 
     choice = {"selection": selection, "propensity": round(probability, 4), "expected_value": round(value, 2)}
-    return _message(customer_id, asset_id, channel, traits, state, model, choice)
+    return _message(customer_id, asset_id, channel, traits, state, model, choice, rng)
