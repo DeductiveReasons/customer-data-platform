@@ -43,7 +43,7 @@ def main():
     url, api_key = sys.argv[1], sys.argv[2]
     count = int(sys.argv[3]) if len(sys.argv) > 3 else 10_000
 
-    pairs = [to_events(entry) for entry, _ in generate(count)]
+    pairs = [to_events(entry) for entry in generate(count)]
     # Profiles go first so identity links exist before consent events arrive.
     for kind, events in (("identify", [p[0] for p in pairs]), ("consent", [p[1] for p in pairs])):
         for start in range(0, len(events), BATCH_SIZE):

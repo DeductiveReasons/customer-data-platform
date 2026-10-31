@@ -31,12 +31,18 @@ locals {
         RECEIVER_SECRET_ARN = aws_secretsmanager_secret.receiver.arn
         MODEL_BUCKET        = aws_s3_bucket.raw.bucket
         MODEL_KEY           = local.model_key
+        ARCHIVE_QUEUE_URL   = aws_sqs_queue.archive.url
       }
       policy = jsonencode([
         {
           Effect   = "Allow"
           Action   = ["dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem"]
           Resource = aws_dynamodb_table.profiles.arn
+        },
+        {
+          Effect   = "Allow"
+          Action   = "sqs:SendMessage"
+          Resource = aws_sqs_queue.archive.arn
         },
         {
           Effect   = "Allow"
@@ -60,8 +66,9 @@ locals {
       timeout = 60
       environment = {
         TABLE_NAME         = aws_dynamodb_table.profiles.name
-        FEEDBACK_STREAM    = aws_kinesis_firehose_delivery_stream.feedback.name
+        ARCHIVE_QUEUE_URL  = aws_sqs_queue.archive.url
         DECISION_QUEUE_URL = aws_sqs_queue.nba_decisions.url
+        METRIC_NAMESPACE   = local.metric_namespace
       }
       policy = jsonencode([
         {
@@ -71,8 +78,8 @@ locals {
         },
         {
           Effect   = "Allow"
-          Action   = "firehose:PutRecord"
-          Resource = aws_kinesis_firehose_delivery_stream.feedback.arn
+          Action   = "sqs:SendMessage"
+          Resource = aws_sqs_queue.archive.arn
         },
         {
           Effect   = "Allow"
@@ -83,6 +90,35 @@ locals {
           Effect   = "Allow"
           Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
           Resource = aws_sqs_queue.feedback.arn
+        },
+      ])
+    }
+    archive = {
+      handler = "cdp.archive.handler"
+      timeout = 60
+      environment = {
+        BUCKET = aws_s3_bucket.raw.bucket
+        DATASET_PREFIXES = jsonencode({
+          raw                  = "events/"
+          history              = local.history_prefix
+          feedback_email       = "${local.feedback_prefix}email/"
+          feedback_direct_mail = "${local.feedback_prefix}direct_mail/"
+        })
+      }
+      policy = jsonencode([
+        {
+          Effect = "Allow"
+          Action = "s3:PutObject"
+          Resource = [
+            "${aws_s3_bucket.raw.arn}/events/*",
+            "${aws_s3_bucket.raw.arn}/${local.history_prefix}*",
+            "${aws_s3_bucket.raw.arn}/${local.feedback_prefix}*",
+          ]
+        },
+        {
+          Effect   = "Allow"
+          Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+          Resource = aws_sqs_queue.archive.arn
         },
       ])
     }
@@ -115,8 +151,9 @@ locals {
     }
   }
 
-  model_key       = "models/nba/latest.json"
-  feedback_prefix = "feedback/"
+  model_key        = "models/nba/latest.json"
+  feedback_prefix  = "feedback/"
+  metric_namespace = "${var.name}/NBA"
 }
 
 # ---------- Feedback loop ----------
@@ -145,21 +182,6 @@ resource "aws_lambda_event_source_mapping" "nba_feedback" {
 
   scaling_config {
     maximum_concurrency = 10
-  }
-}
-
-resource "aws_kinesis_firehose_delivery_stream" "feedback" {
-  name        = "${var.name}-feedback"
-  destination = "extended_s3"
-
-  extended_s3_configuration {
-    role_arn            = aws_iam_role.firehose.arn
-    bucket_arn          = aws_s3_bucket.raw.arn
-    buffering_size      = 5
-    buffering_interval  = 60
-    compression_format  = "GZIP"
-    prefix              = "${local.feedback_prefix}year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/"
-    error_output_prefix = "errors/feedback/!{firehose:error-output-type}/"
   }
 }
 

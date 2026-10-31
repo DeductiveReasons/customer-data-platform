@@ -11,7 +11,7 @@ flowchart TD
     C[Data warehouse jobs] --> D
     D[API Gateway] --> E[Ingest Lambda: validate]
     E --> F[EventBridge]
-    F --> G[Firehose] --> H[(S3: raw events)]
+    F --> G[SQS archive queue and Lambda] --> H[(S3: raw events)]
     F --> Q[EventBridge archive: replay]
     F --> I[SQS processing queue]
     I --> J[Starter Lambda]
@@ -141,11 +141,31 @@ flowchart TD
 
 Feedback affects decisions in two ways. It changes the customer's next decision straight away, because their opens and clicks are model features. It also trains new models when the retrain Lambda runs, which only publishes assets with at least 500 rows, 20 registrations and a holdout AUC of 0.55. Registered customers get one onboarding message and then leave the sign-up journey. An unsubscribe removes consent for that channel.
 
-Run a retrain after a campaign, allowing a few minutes for Firehose to deliver the data:
+Run a retrain after a campaign, allowing a few minutes for the archive Lambda to write the data:
 
 ```sh
 aws lambda invoke --function-name "$(terraform output -raw nba_retrain_function)" /dev/stdout
 ```
+
+### Query and dashboard
+
+Query these tables in Amazon Athena, using the workgroup and database from `terraform output`. Saved queries are under the **Saved queries** tab.
+
+| Table | Contents |
+|---|---|
+| `people` | One row per person, with status and current next best action |
+| `nba_history` | Every message sent, with the asset, channel and score |
+| `email_engagement` | Simulated email opens, clicks, registrations and unsubscribes |
+| `direct_mail_engagement` | Simulated direct mail QR visits, registrations and unsubscribes |
+
+Refresh `people` and the dashboard's people totals by running the export function. Its schedule is off unless `nba_schedule_enabled=true`.
+
+```sh
+aws lambda invoke --function-name "$(terraform output -raw nba_export_function)" /dev/stdout
+terraform output dashboard_url
+```
+
+The archive can store a row twice after a retry, so count `DISTINCT message_id`. Athena charges by data scanned, and this workgroup stops any query that scans more than 1 GB.
 
 Limitations:
 

@@ -15,6 +15,7 @@ locals {
     { for k, q in aws_sqs_queue.destination_dlq : k => q.name },
     { nba_decisions = aws_sqs_queue.nba_decisions_dlq.name },
     { feedback = aws_sqs_queue.feedback_dlq.name },
+    { archive = aws_sqs_queue.archive_dlq.name },
   )
 }
 

@@ -3,6 +3,7 @@ import json
 import os
 import time
 import urllib.request
+from datetime import datetime, timezone
 
 import boto3
 from botocore.exceptions import ClientError
@@ -15,6 +16,7 @@ SCAN_MIN_DAYS_BETWEEN_CONTACTS = 7
 MODEL_CACHE_SECONDS = 300
 _table = None
 _token = None
+_sqs = None
 _model = None
 _model_loaded_at = 0.0
 
@@ -24,6 +26,13 @@ def _get_table():
     if _table is None:
         _table = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
     return _table
+
+
+def _get_sqs():
+    global _sqs
+    if _sqs is None:
+        _sqs = boto3.client("sqs")
+    return _sqs
 
 
 def _get_token():
@@ -103,6 +112,30 @@ def _call_endpoint(message):
         pass
 
 
+def _log_decision(message, trigger):
+    """Write the history row. A logging failure must not resend a message that already went out."""
+    fields = (
+        "message_id",
+        "customer_id",
+        "touch",
+        "asset_id",
+        "channel",
+        "selection",
+        "propensity",
+        "expected_value",
+        "model_version",
+    )
+    row = {field: message.get(field) for field in fields}
+    row.update({"trigger": trigger, "decided_at": datetime.now(timezone.utc).isoformat()})
+    try:
+        _get_sqs().send_message(
+            QueueUrl=os.environ["ARCHIVE_QUEUE_URL"],
+            MessageBody=json.dumps({"dataset": "history", "row": row}),
+        )
+    except Exception as exc:
+        print(f"history write failed for {message['message_id']}: {type(exc).__name__}")
+
+
 def _too_recent(profile, now):
     # Scans respect a contact gap. Feedback-triggered decisions are the next step in a journey.
     if profile.get("trigger") != "scan":
@@ -127,6 +160,7 @@ def _process(profile, table, model):
     except Exception:
         _release(table, message)  # Let the SQS retry claim and send this message again.
         raise
+    _log_decision(message, profile.get("trigger"))
 
 
 def handler(event, _context):

@@ -22,7 +22,7 @@ except ImportError:
     sys.modules["boto3.dynamodb"] = types.ModuleType("boto3.dynamodb")
     sys.modules["boto3.dynamodb.conditions"] = conditions
 
-from cdp import assets, nba, nba_decide, nba_feedback, nba_retrain, nba_scan, receiver, simulator, training  # noqa: E402
+from cdp import archive, assets, nba, nba_decide, nba_export, nba_feedback, nba_retrain, nba_scan, receiver, simulator, training  # noqa: E402
 from journey import run  # noqa: E402
 from sample_data import generate, to_events  # noqa: E402
 from test_cdp import ClientError  # noqa: E402
@@ -258,12 +258,14 @@ class ScanTests(unittest.TestCase):
 class DecideHandlerTests(unittest.TestCase):
     def setUp(self):
         self.table = mock.Mock()
+        self.sqs = mock.Mock()
         patches = [
             mock.patch.object(nba_decide, "_get_table", return_value=self.table),
             mock.patch.object(nba_decide, "_get_token", return_value="token"),
             mock.patch.object(nba_decide, "_get_model", return_value=nba.BUNDLED_MODEL),
+            mock.patch.object(nba_decide, "_get_sqs", return_value=self.sqs),
             mock.patch.object(nba.random, "random", return_value=0.99),
-            mock.patch.dict(os.environ, {"RECEIVER_URL": "https://receiver.example.com/"}),
+            mock.patch.dict(os.environ, {"RECEIVER_URL": "https://receiver.example.com/", "ARCHIVE_QUEUE_URL": "a"}),
         ]
         for patch in patches:
             patch.start()
@@ -284,6 +286,23 @@ class DecideHandlerTests(unittest.TestCase):
         self.assertIn("<html>", payload["content_html"])
         self.assertIsNone(receiver.validate(payload["channel"], payload))
         self.assertIn("ADD s_touches", self.table.update_item.call_args.kwargs["UpdateExpression"])
+
+    def test_history_row_has_no_contact_details_and_failure_does_not_retry(self):
+        self.sqs.send_message.side_effect = OSError()
+        with mock.patch.object(nba_decide.urllib.request, "urlopen"):
+            result = nba_decide.handler(self.event(), None)
+        self.assertEqual(result, {"batchItemFailures": []})
+        body = json.loads(self.sqs.send_message.call_args.kwargs["MessageBody"])
+        self.assertEqual(body["dataset"], "history")
+        row = body["row"]
+        self.assertEqual(row["trigger"], "feedback")
+        self.assertNotIn("recipient", row)
+        self.assertNotIn("content_html", row)
+
+    def test_failed_send_writes_no_history(self):
+        with mock.patch.object(nba_decide.urllib.request, "urlopen", side_effect=OSError()):
+            nba_decide.handler(self.event(), None)
+        self.sqs.send_message.assert_not_called()
 
     def test_duplicate_touch_is_skipped(self):
         self.table.put_item.side_effect = ClientError(
@@ -330,12 +349,17 @@ class FeedbackHandlerTests(unittest.TestCase):
         self.table.get_item.return_value = {
             "Item": {"pk": "CUSTOMER#c1", "sk": "PROFILE", "s_registered": True, "s_clicks": 1, "c_email": True}
         }
-        self.firehose = mock.Mock()
         self.sqs = mock.Mock()
         patches = [
-            mock.patch.object(nba_feedback, "_clients", return_value=(self.resource, self.firehose, self.sqs)),
+            mock.patch.object(nba_feedback, "_clients", return_value=(self.resource, self.sqs)),
             mock.patch.dict(
-                os.environ, {"TABLE_NAME": "t", "FEEDBACK_STREAM": "s", "DECISION_QUEUE_URL": "q"}
+                os.environ,
+                {
+                    "TABLE_NAME": "t",
+                    "ARCHIVE_QUEUE_URL": "a",
+                    "DECISION_QUEUE_URL": "q",
+                    "METRIC_NAMESPACE": "cdp/NBA",
+                },
             ),
         ]
         for patch in patches:
@@ -350,10 +374,14 @@ class FeedbackHandlerTests(unittest.TestCase):
         self.assertEqual(self.run_handler(), {"batchItemFailures": []})
         items = self.resource.meta.client.transact_write_items.call_args.kwargs["TransactItems"]
         self.assertIn("s_registered", items[1]["Update"]["UpdateExpression"])
-        record = json.loads(self.firehose.put_record.call_args.kwargs["Record"]["Data"])
+        archived, decision = self.sqs.send_message.call_args_list
+        body = json.loads(archived.kwargs["MessageBody"])
+        self.assertEqual(body["dataset"], "feedback_email")
+        record = body["row"]
         self.assertTrue(record["registered"])
+        self.assertTrue(record["feedback_at"])
         self.assertEqual(record["asset_id"], "free_trial")
-        next_decision = json.loads(self.sqs.send_message.call_args.kwargs["MessageBody"])
+        next_decision = json.loads(decision.kwargs["MessageBody"])
         self.assertEqual(next_decision["trigger"], "feedback")
         self.assertTrue(next_decision["state"]["registered"])
 
@@ -372,7 +400,7 @@ class FeedbackHandlerTests(unittest.TestCase):
             "TransactWriteItems",
         )
         self.assertEqual(self.run_handler(), {"batchItemFailures": []})
-        self.sqs.send_message.assert_called_once()
+        self.assertEqual(self.sqs.send_message.call_count, 2)
 
     def test_other_transaction_failures_retry(self):
         self.resource.meta.client.transact_write_items.side_effect = ClientError(
@@ -384,6 +412,63 @@ class FeedbackHandlerTests(unittest.TestCase):
         )
         self.assertEqual(self.run_handler(), {"batchItemFailures": [{"itemIdentifier": "m1"}]})
         self.sqs.send_message.assert_not_called()
+
+
+class ArchiveTests(unittest.TestCase):
+    def setUp(self):
+        self.s3 = mock.Mock()
+        patches = [
+            mock.patch.object(archive, "_client", return_value=self.s3),
+            mock.patch.dict(
+                os.environ,
+                {"BUCKET": "b", "DATASET_PREFIXES": json.dumps({"history": "history/", "raw": "events/"})},
+            ),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    @staticmethod
+    def record(message_id, dataset, row):
+        return {"messageId": message_id, "body": json.dumps({"dataset": dataset, "row": row})}
+
+    def test_groups_rows_into_one_file_per_dataset(self):
+        records = [self.record("1", "history", {"a": 1}), self.record("2", "history", {"a": 2}), self.record("3", "raw", {"b": 1})]
+        self.assertEqual(archive.handler({"Records": records}, None), {"batchItemFailures": []})
+        calls = {c.kwargs["Key"].split("/")[0]: c.kwargs["Body"] for c in self.s3.put_object.call_args_list}
+        lines = gzip.decompress(calls["history"]).decode().splitlines()
+        self.assertEqual([json.loads(line)["a"] for line in lines], [1, 2])
+        self.assertIn("events", calls)
+
+    def test_bad_messages_and_failed_writes_are_retried(self):
+        self.s3.put_object.side_effect = OSError()
+        records = [self.record("1", "unknown", {}), self.record("2", "history", {"a": 1})]
+        result = archive.handler({"Records": records}, None)
+        self.assertEqual({f["itemIdentifier"] for f in result["batchItemFailures"]}, {"1", "2"})
+
+
+class ExportTests(unittest.TestCase):
+    def item(self, **attrs):
+        base = {"pk": "CUSTOMER#c1", "sk": "PROFILE"}
+        base.update({f"t_{k}": v for k, v in TRAITS.items()})
+        base.update({f"c_{k}": v for k, v in ALL_CONSENT.items()})
+        base.update(attrs)
+        return base
+
+    def row(self, **attrs):
+        return nba_export.person_row(self.item(**attrs), "now", nba.BUNDLED_MODEL)
+
+    def test_person_row_shows_next_best_action(self):
+        row = self.row()
+        self.assertEqual(row["status"], "active")
+        self.assertIn(row["next_best_asset"], assets.SIGNUP_ASSETS)
+        self.assertIsNotNone(row["next_best_propensity"])
+
+    def test_statuses(self):
+        self.assertEqual(self.row(c_marketing=False)["status"], "no_marketing_consent")
+        self.assertEqual(self.row(s_touches=nba.MAX_TOUCHES)["status"], "journey_complete")
+        self.assertEqual(self.row(s_registered=True)["status"], "onboarding_due")
+        self.assertEqual(self.row(s_registered=True, s_onboarded=True)["status"], "registered")
 
 
 class RetrainTests(unittest.TestCase):

@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eric Health Campaign Console</title>
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--text:#16202e;--muted:#5d6b7e;--line:#dfe4ea;--accent:#0b6e6e;--accent-soft:#dcefee;--bad:#b42318;--good:#1a7f4b;--warn:#a15c07;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#10151c;--panel:#18202a;--text:#e8edf3;--muted:#9aa8b8;--line:#2c3744;--accent:#58c4bd;--accent-soft:#1c3a3a;--bad:#f97066;--good:#4cc38a;--warn:#f2b64d;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{background:var(--panel);border-bottom:1px solid var(--line);padding:12px 20px;display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;position:sticky;top:0;z-index:2}
+header strong{font-size:16px}
+nav{display:flex;flex-wrap:wrap;gap:4px;flex:1}
+nav button{background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);padding:6px 10px;font:inherit;cursor:pointer}
+nav button.on{color:var(--text);border-color:var(--accent);font-weight:600}
+main{max-width:1180px;margin:0 auto;padding:20px}
+h1{font-size:22px;margin:0 0 4px}
+h2{font-size:16px;margin:0 0 12px}
+.sub{color:var(--muted);margin:0 0 18px}
+.notice{background:var(--accent-soft);border-radius:8px;padding:9px 13px;margin-bottom:18px;font-size:14px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+.tile,.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:15px}
+.tile b{display:block;font-size:26px;font-variant-numeric:tabular-nums}
+.tile span{color:var(--muted);font-size:13px}
+.panel{margin-bottom:18px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:600}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+tr.link{cursor:pointer}tr.link:hover{background:var(--accent-soft)}
+.bar{display:grid;grid-template-columns:minmax(90px,170px) 1fr 60px;gap:10px;align-items:center;margin-bottom:7px;font-size:14px}
+.bar i{display:block;height:13px;background:var(--accent);border-radius:3px;min-width:2px}
+.bar em{font-style:normal;text-align:right;font-variant-numeric:tabular-nums}
+.assets{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px}
+.asset iframe{width:100%;height:340px;border:1px solid var(--line);border-radius:6px;background:#fff}
+.asset h2{margin-bottom:2px}
+.tag{display:inline-block;background:var(--accent-soft);border-radius:5px;padding:0 7px;font-size:12px}
+.seg{display:flex;gap:6px;margin:9px 0}
+button.small,select,input{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:6px;padding:5px 9px}
+button.small{cursor:pointer}button.small.on{background:var(--accent-soft)}
+.filters{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.ok{color:var(--good);font-weight:600}.alert{color:var(--bad);font-weight:600}.wait{color:var(--warn);font-weight:600}
+.login{max-width:380px;margin:12vh auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:24px}
+.login input{width:100%;margin:10px 0}.login button{width:100%;background:var(--accent);color:var(--bg);border:0;border-radius:6px;padding:8px;font:inherit;font-weight:600;cursor:pointer}
+.error{color:var(--bad)}.muted{color:var(--muted)}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <h1>Eric Health Campaign Console</h1>
+  <p class="muted">Demo with simulated data. Enter your password to continue.</p>
+  <form id="loginForm">
+    <label for="pw">Password</label>
+    <input id="pw" type="password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+    <p id="loginError" class="error" role="alert"></p>
+  </form>
+</div>
+<div id="app" hidden>
+  <header>
+    <strong>Eric Health Console</strong>
+    <nav id="nav" aria-label="Views"></nav>
+    <button class="small" id="signout">Sign out</button>
+  </header>
+  <main id="view" tabindex="-1"></main>
+</div>
+<script>
+const VIEWS={overview:'Overview',performance:'Performance',assets:'Digital assets',people:'People',monitoring:'Monitoring'};
+const STATUSES={active:'Active journey',onboarding_due:'Onboarding due',registered:'Registered',journey_complete:'Journey complete',no_marketing_consent:'No marketing consent',no_contact_option:'No contact option'};
+const LABELS={email:'Email',direct_mail:'Direct mail'};
+let password=null,currentView='overview',assetNames={};
+try{password=sessionStorage.getItem('pw')}catch(e){}
+const view=document.getElementById('view');
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const num=v=>Number(v||0).toLocaleString();
+const pct=(a,b)=>Number(b)?(100*Number(a)/Number(b)).toFixed(1)+'%':'–';
+const assetName=id=>assetNames[id]||String(id??'–').replace(/_/g,' ');
+async function api(path){
+  const r=await fetch(path,{headers:{Authorization:'Bearer '+password}});
+  if(r.status===401){signOut('That password did not work.');throw new Error('unauthorized')}
+  const d=await r.json();
+  if(!r.ok)throw new Error(d.error||'Could not load this view.');
+  return d;
+}
+function signOut(msg){password=null;try{sessionStorage.removeItem('pw')}catch(e){}
+  document.getElementById('app').hidden=true;document.getElementById('login').hidden=false;
+  document.getElementById('loginError').textContent=msg||''}
+function table(cols,rows,opts={}){
+  if(!rows.length)return `<p class="muted">${esc(opts.empty||'No data yet.')}</p>`;
+  return `<div class="scroll"><table><thead><tr>${cols.map(c=>`<th class="${c.n?'n':''}" scope="col">${esc(c.t)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr ${opts.link?`class="link" tabindex="0" data-id="${esc(r[opts.link])}"`:''}>${cols.map(c=>`<td class="${c.n?'n':''}">${c.h?c.h(r):esc(c.f?c.f(r):r[c.k])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+function funnelTotals(rows){const t={delivered:0,opened:0,clicked:0,registered:0,unsubscribed:0};
+  rows.forEach(r=>Object.keys(t).forEach(k=>t[k]+=Number(r[k]||0)));return t}
+const funnelCols=[
+ {t:'Asset',f:r=>assetName(r.asset_id)},{t:'Channel',f:r=>LABELS[r.channel]||r.channel},
+ {t:'Delivered',k:'delivered',n:1,f:r=>num(r.delivered)},
+ {t:'Open rate',n:1,f:r=>r.channel==='direct_mail'?'n/a':pct(r.opened,r.delivered)},
+ {t:'Click rate',n:1,f:r=>pct(r.clicked,r.delivered)},
+ {t:'Registered',n:1,f:r=>num(r.registered)},
+ {t:'Sign-up rate',n:1,f:r=>pct(r.registered,r.delivered)},
+ {t:'Unsubscribed',n:1,f:r=>num(r.unsubscribed)}];
+const render={
+ async overview(){
+  const d=await api('/api/overview'),t=d.totals||{},f=funnelTotals(d.funnel),max=Math.max(1,...d.statuses.map(s=>Number(s.people)));
+  return `<h1>Overview</h1><p class="sub">People snapshot: ${esc(t.snapshot_at||'not exported yet')} · Model: ${esc(t.model_version||'–')}</p>
+  <div class="tiles">
+   <div class="tile"><b>${num(t.people)}</b><span>People</span></div>
+   <div class="tile"><b>${num(t.contacted)}</b><span>Contacted</span></div>
+   <div class="tile"><b>${num(t.registered)}</b><span>Registered</span></div>
+   <div class="tile"><b>${pct(t.registered,t.people)}</b><span>Registered, all people</span></div>
+   <div class="tile"><b>${num(f.delivered)}</b><span>Messages delivered</span></div>
+  </div>
+  <div class="panel"><h2>People by status</h2>${d.statuses.map(s=>`<div class="bar"><span>${esc(STATUSES[s.status]||s.status)}</span><i style="width:${(100*Number(s.people)/max).toFixed(1)}%"></i><em>${num(s.people)}</em></div>`).join('')||'<p class="muted">No people yet.</p>'}</div>`;
+ },
+ async performance(){
+  const d=await api('/api/performance');
+  return `<h1>Performance</h1><p class="sub">Simulated results by asset and channel.</p>
+  <div class="panel"><h2>Funnel by asset and channel</h2>${table(funnelCols,d.funnel)}</div>
+  <div class="panel"><h2>Current next best actions</h2>${table([
+   {t:'Asset',f:r=>assetName(r.asset_id)},{t:'Channel',f:r=>LABELS[r.channel]||r.channel},
+   {t:'People',n:1,f:r=>num(r.people)},{t:'Avg. propensity',n:1,f:r=>(100*Number(r.avg_propensity)).toFixed(1)+'%'},
+   {t:'Avg. expected value',n:1,f:r=>'$'+Number(r.avg_expected_value).toFixed(2)}],d.next_actions)}</div>`;
+ },
+ async assets(){
+  const d=await api('/api/assets');
+  const after=()=>{document.querySelectorAll('.asset').forEach(card=>{
+    card.querySelectorAll('[data-ch]').forEach(b=>b.onclick=()=>{
+      card.querySelectorAll('[data-ch]').forEach(x=>x.classList.toggle('on',x===b));
+      card.querySelector('iframe').srcdoc=d.assets.find(a=>a.id===card.dataset.id)[b.dataset.ch+'_html']})})};
+  view._after=after;
+  return `<h1>Digital assets</h1><p class="sub">${esc(d.brand.disclaimer)} Goal: ${esc(d.brand.goal)}.</p><div class="assets">${d.assets.map(a=>{
+   const rows=d.funnel.filter(r=>r.asset_id===a.id),t=funnelTotals(rows);
+   return `<article class="panel asset" data-id="${esc(a.id)}"><h2>${esc(a.name)}</h2><span class="tag">${esc(a.stage)}</span>
+    <p class="muted">${esc(a.subject)}</p><p>${num(t.delivered)} delivered · ${num(t.registered)} registered · ${pct(t.registered,t.delivered)} sign-up rate</p>
+    <div class="seg"><button class="small on" data-ch="email">Email</button><button class="small" data-ch="direct_mail">Direct mail</button></div>
+    <iframe sandbox title="${esc(a.name)} preview" srcdoc="${esc(a.email_html)}"></iframe></article>`}).join('')}</div>`;
+ },
+ async people(params={}){
+  const q=new URLSearchParams();if(params.status)q.set('status',params.status);if(params.customer_id)q.set('customer_id',params.customer_id);
+  const d=await api('/api/people?'+q);
+  view._after=()=>{
+   const go=()=>show('people',{status:document.getElementById('st').value,customer_id:document.getElementById('cid').value.trim()});
+   document.getElementById('st').onchange=go;document.getElementById('cf').onsubmit=e=>{e.preventDefault();go()};
+   document.querySelectorAll('tr.link').forEach(r=>{const open=()=>show('person',{id:r.dataset.id});r.onclick=open;r.onkeydown=e=>{if(e.key==='Enter')open()}})};
+  return `<h1>People</h1><p class="sub">Simulated people. Shows up to ${d.limit}, highest expected value first. Select a row for history.</p>
+  <div class="panel"><form class="filters" id="cf"><label>Status <select id="st"><option value="">All</option>${Object.entries(STATUSES).map(([k,v])=>`<option value="${k}" ${params.status===k?'selected':''}>${esc(v)}</option>`).join('')}</select></label>
+  <label>Customer ID <input id="cid" value="${esc(params.customer_id||'')}"></label><button class="small">Search</button></form>
+  ${table([{t:'Customer',k:'customer_id'},{t:'Name',f:r=>`${r.first_name||''} ${r.last_name||''}`},{t:'Status',f:r=>STATUSES[r.status]||r.status},
+   {t:'Touches',k:'touches',n:1},{t:'Clicks',k:'clicks',n:1},{t:'Registered',f:r=>r.registered==='true'?'Yes':'No'},
+   {t:'Next best asset',f:r=>r.next_best_asset?assetName(r.next_best_asset):'–'},{t:'Channel',f:r=>LABELS[r.next_best_channel]||'–'},
+   {t:'Propensity',n:1,f:r=>r.next_best_propensity?(100*Number(r.next_best_propensity)).toFixed(1)+'%':'–'}],d.people,{link:'customer_id',empty:'No matching people.'})}</div>`;
+ },
+ async person(params){
+  const d=await api('/api/people/'+encodeURIComponent(params.id));
+  view._after=()=>{document.getElementById('back').onclick=()=>show('people')};
+  const yn=v=>v==='true'?'Yes':v==='false'?'No':'–';
+  return `<button class="small" id="back">Back to people</button><h1 style="margin-top:12px">${esc(params.id)}</h1><p class="sub">Message and engagement history. Engagement is simulated.</p>
+  <div class="panel">${table([{t:'Sent',k:'decided_at'},{t:'Touch',k:'touch'},{t:'Asset',f:r=>assetName(r.asset_id)},{t:'Channel',f:r=>LABELS[r.channel]||r.channel},
+   {t:'Selection',k:'selection'},{t:'Trigger',k:'trigger'},{t:'Opened',f:r=>r.channel==='direct_mail'?'n/a':yn(r.opened)},{t:'Clicked',f:r=>yn(r.clicked)},{t:'Registered',f:r=>yn(r.registered)},{t:'Unsubscribed',f:r=>yn(r.unsubscribed)}],d.history,{empty:'No messages sent to this person.'})}</div>`;
+ },
+ async monitoring(){
+  const d=await api('/api/monitoring');
+  const failed=d.queues.filter(q=>q.failed_queue).reduce((s,q)=>s+q.waiting,0),firing=d.alarms.filter(a=>a.state==='ALARM').length,work=d.queues.filter(q=>!q.failed_queue).reduce((s,q)=>s+q.waiting+q.in_progress,0),errs=d.lambdas.reduce((s,l)=>s+l.errors,0);
+  const stateCls=s=>s==='OK'?'ok':s==='ALARM'?'alert':'wait';
+  return `<h1>Monitoring</h1><p class="sub"><a href="${esc(d.dashboard_url)}" target="_blank" rel="noopener">Open the CloudWatch dashboard</a></p>
+  <div class="tiles"><div class="tile"><b class="${firing?'alert':'ok'}">${firing}</b><span>Alarms firing</span></div>
+  <div class="tile"><b class="${failed?'alert':'ok'}">${num(failed)}</b><span>Failed messages</span></div>
+  <div class="tile"><b>${num(work)}</b><span>Messages in progress</span></div>
+  <div class="tile"><b class="${errs?'alert':'ok'}">${num(errs)}</b><span>Function errors, 24 hours</span></div></div>
+  <div class="panel"><h2>Queues</h2>${table([{t:'Queue',k:'name'},{t:'Type',f:q=>q.failed_queue?'Failed messages':'Working'},{t:'Waiting',n:1,h:q=>`<span class="${q.failed_queue&&q.waiting?'alert':''}">${num(q.waiting)}</span>`},{t:'In progress',n:1,f:q=>num(q.in_progress)}],d.queues)}</div>
+  <div class="panel"><h2>Functions, last 24 hours</h2>${table([{t:'Function',k:'name'},{t:'Runs',n:1,f:l=>num(l.invocations)},{t:'Errors',n:1,h:l=>`<span class="${l.errors?'alert':''}">${num(l.errors)}</span>`}],d.lambdas)}</div>
+  <div class="panel"><h2>Alarms</h2>${table([{t:'Alarm',k:'name'},{t:'State',h:a=>`<span class="${stateCls(a.state)}">${esc(a.state)}</span>`}],d.alarms)}</div>`;
+ }
+};
+async function show(name,params){
+  currentView=name;const top=name==='person'?'people':name;
+  document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.v===top));
+  view.innerHTML='<p class="muted" role="status">Loading…</p>';view._after=null;
+  try{const html=await render[name](params);if(currentView!==name)return;view.innerHTML=html;if(view._after)view._after()}
+  catch(e){if(e.message!=='unauthorized')view.innerHTML=`<div class="panel"><p class="error" role="alert">${esc(e.message)}</p><button class="small" id="retry">Try again</button></div>`;
+   const r=document.getElementById('retry');if(r)r.onclick=()=>show(name,params)}
+}
+async function start(){
+  document.getElementById('login').hidden=true;document.getElementById('app').hidden=false;
+  try{(await api('/api/assets')).assets.forEach(a=>assetNames[a.id]=a.name)}catch(e){if(e.message==='unauthorized')return}
+  show('overview');
+}
+document.getElementById('nav').innerHTML=Object.entries(VIEWS).map(([k,v])=>`<button data-v="${k}">${v}</button>`).join('');
+document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>show(b.dataset.v));
+document.getElementById('signout').onclick=()=>signOut();
+document.getElementById('loginForm').onsubmit=e=>{e.preventDefault();password=document.getElementById('pw').value;
+  try{sessionStorage.setItem('pw',password)}catch(err){}document.getElementById('pw').value='';start()};
+if(password)start();else document.getElementById('login').hidden=false;
+</script>
+</body>
+</html>

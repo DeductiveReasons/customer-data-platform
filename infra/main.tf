@@ -189,89 +189,59 @@ resource "aws_cloudwatch_event_target" "processing" {
   input_path     = "$.detail"
 }
 
-resource "aws_cloudwatch_event_target" "firehose" {
-  rule           = aws_cloudwatch_event_rule.all.name
-  event_bus_name = aws_cloudwatch_event_bus.main.name
-  arn            = aws_kinesis_firehose_delivery_stream.raw.arn
-  role_arn       = aws_iam_role.events_to_firehose.arn
-  input_path     = "$.detail"
+# ---------- Archive: writes rows to S3 in batches ----------
+
+resource "aws_sqs_queue" "archive_dlq" {
+  name                      = "${var.name}-archive-dlq"
+  message_retention_seconds = 1209600
+  sqs_managed_sse_enabled   = true
 }
 
-resource "aws_kinesis_firehose_delivery_stream" "raw" {
-  name        = "${var.name}-raw"
-  destination = "extended_s3"
-
-  extended_s3_configuration {
-    role_arn            = aws_iam_role.firehose.arn
-    bucket_arn          = aws_s3_bucket.raw.arn
-    buffering_size      = 5
-    buffering_interval  = 60
-    compression_format  = "GZIP"
-    prefix              = "events/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/"
-    error_output_prefix = "errors/!{firehose:error-output-type}/"
-
-    processing_configuration {
-      enabled = true
-      processors {
-        type = "AppendDelimiterToRecord"
-      }
-    }
-  }
-}
-
-resource "aws_iam_role" "firehose" {
-  name = "${var.name}-firehose"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "firehose.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
+resource "aws_sqs_queue" "archive" {
+  name                       = "${var.name}-archive"
+  visibility_timeout_seconds = 360
+  sqs_managed_sse_enabled    = true
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.archive_dlq.arn
+    maxReceiveCount     = 5
   })
 }
 
-resource "aws_iam_role_policy" "firehose" {
-  role = aws_iam_role.firehose.id
+resource "aws_sqs_queue_policy" "archive" {
+  queue_url = aws_sqs_queue.archive.id
   policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "s3:AbortMultipartUpload",
-        "s3:GetBucketLocation",
-        "s3:GetObject",
-        "s3:ListBucket",
-        "s3:ListBucketMultipartUploads",
-        "s3:PutObject",
-      ]
-      Resource = [aws_s3_bucket.raw.arn, "${aws_s3_bucket.raw.arn}/*"]
-    }]
-  })
-}
-
-resource "aws_iam_role" "events_to_firehose" {
-  name = "${var.name}-events-to-firehose"
-  assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
       Principal = { Service = "events.amazonaws.com" }
-      Action    = "sts:AssumeRole"
+      Action    = "sqs:SendMessage"
+      Resource  = aws_sqs_queue.archive.arn
+      Condition = { ArnEquals = { "aws:SourceArn" = aws_cloudwatch_event_rule.all.arn } }
     }]
   })
 }
 
-resource "aws_iam_role_policy" "events_to_firehose" {
-  role = aws_iam_role.events_to_firehose.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["firehose:PutRecord", "firehose:PutRecordBatch"]
-      Resource = aws_kinesis_firehose_delivery_stream.raw.arn
-    }]
-  })
+resource "aws_cloudwatch_event_target" "archive" {
+  rule           = aws_cloudwatch_event_rule.all.name
+  event_bus_name = aws_cloudwatch_event_bus.main.name
+  arn            = aws_sqs_queue.archive.arn
+
+  input_transformer {
+    input_paths    = { detail = "$.detail" }
+    input_template = "{\"dataset\":\"raw\",\"row\":<detail>}"
+  }
+}
+
+resource "aws_lambda_event_source_mapping" "archive" {
+  event_source_arn                   = aws_sqs_queue.archive.arn
+  function_name                      = aws_lambda_function.fn["archive"].arn
+  batch_size                         = 1000
+  maximum_batching_window_in_seconds = 60
+  function_response_types            = ["ReportBatchItemFailures"]
+
+  scaling_config {
+    maximum_concurrency = 5
+  }
 }
 
 # ---------- Destination queues and credentials ----------

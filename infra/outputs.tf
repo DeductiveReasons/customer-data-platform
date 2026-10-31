@@ -23,6 +23,26 @@ output "nba_retrain_function" {
   value = aws_lambda_function.fn["nba-retrain"].function_name
 }
 
+output "nba_export_function" {
+  value = aws_lambda_function.export.function_name
+}
+
+output "athena_console_url" {
+  value = "https://${local.region}.console.aws.amazon.com/athena/home?region=${local.region}#/query-editor"
+}
+
+output "athena_workgroup" {
+  value = aws_athena_workgroup.analytics.name
+}
+
+output "athena_database" {
+  value = aws_glue_catalog_database.analytics.name
+}
+
+output "dashboard_url" {
+  value = "https://${local.region}.console.aws.amazon.com/cloudwatch/home?region=${local.region}#dashboards/dashboard/${aws_cloudwatch_dashboard.main.dashboard_name}"
+}
+
 output "raw_bucket" {
   value = aws_s3_bucket.raw.bucket
 }
