@@ -79,6 +79,54 @@ Events need a `type` (`track`, `identify`, `page`, `screen` or `consent`) and at
 - CloudTrail is an account-level service and is not created here.
 - Terraform state is local. Use a remote backend for team or production use.
 
+## Next best action demo
+
+This adds a synthetic population, a propensity model and a decision pipeline that calls a dummy email and direct mail service. **No real email or mail is ever sent.** The receiver only validates and stores requests for 7 days.
+
+```mermaid
+flowchart TD
+    A[scripts/ingest_sample.py: 10,000 fake people] --> B[Ingestion API]
+    B --> C[(DynamoDB profiles)]
+    D[Schedule or manual run] --> E[Scan Lambda]
+    C --> E
+    E --> F[SQS decisions queue]
+    F --> G[Decide Lambda: score, check consent, build HTML]
+    G -->|POST /email| H[Dummy receiver]
+    G -->|POST /direct-mail| H
+    H --> I[(Stored requests)]
+```
+
+Run it after deploying:
+
+```sh
+cd infra
+API_KEY=$(aws apigateway get-api-key --include-value --api-key "$(terraform output -raw api_key_id)" --query value --output text)
+python ../scripts/ingest_sample.py "$(terraform output -raw events_url)" "$API_KEY"
+
+# Wait for the events to finish processing, then run a scan.
+aws lambda invoke --function-name "$(terraform output -raw nba_scan_function)" /dev/stdout
+
+# See what the dummy service received.
+aws dynamodb scan --table-name "$(terraform output -raw receiver_table)" --select COUNT
+```
+
+Set `nba_schedule_enabled=true` to scan daily. To retrain or preview without AWS:
+
+```sh
+python scripts/train_model.py
+python scripts/simulate_local.py
+```
+
+**How decisions work:** each person gets a propensity for `win_back`, `replenish` and `loyalty_upgrade` from one logistic regression per action. The pipeline picks the offer and channel with the highest `propensity x channel lift x offer value - channel cost`, and skips anyone with no positive option. Contact needs `marketing` consent and consent for that channel, and each customer gets at most one message per ISO week.
+
+Limitations:
+
+- The people, responses, model accuracy, offer values, channel lift and costs are all invented. The results show that the pipeline works, not how a real campaign would perform.
+- The propensities are not causal uplift estimates, so a high score does not prove the message caused the response.
+- The model is packaged with the Lambda code, and there is no feature store, retraining schedule, drift monitoring or experiment holdout.
+- A customer can be claimed for the week and not contacted if a delivery later fails all its retries and lands in the dead-letter queue.
+- A real sender would also need suppression lists, unsubscribe links, address validation and legal review of the content.
+
 ## Test
 
 ```sh

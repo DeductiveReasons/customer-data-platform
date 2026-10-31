@@ -20,6 +20,17 @@ variable "enabled_destinations" {
   }
 }
 
+variable "nba_schedule" {
+  type    = string
+  default = "rate(1 day)"
+}
+
+variable "nba_schedule_enabled" {
+  description = "Run the next best action scan on a schedule"
+  type        = bool
+  default     = false
+}
+
 variable "alert_email" {
   description = "Optional email address for alarm notifications"
   type        = string

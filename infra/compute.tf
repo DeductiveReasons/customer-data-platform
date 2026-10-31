@@ -89,7 +89,7 @@ locals {
     }
   }
 
-  lambdas = merge(local.core_lambdas, local.delivery_lambdas)
+  lambdas = merge(local.core_lambdas, local.delivery_lambdas, local.nba_lambdas)
 }
 
 resource "aws_iam_role" "lambda" {

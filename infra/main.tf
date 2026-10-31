@@ -10,6 +10,10 @@ terraform {
       source  = "hashicorp/archive"
       version = "~> 2.4"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 }
 
@@ -117,6 +121,10 @@ resource "aws_dynamodb_table" "profiles" {
     type = "S"
   }
 
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
   point_in_time_recovery {
     enabled = true
   }

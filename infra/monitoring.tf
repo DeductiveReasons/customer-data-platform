@@ -13,6 +13,7 @@ locals {
   dlqs = merge(
     { processing = aws_sqs_queue.processing_dlq.name },
     { for k, q in aws_sqs_queue.destination_dlq : k => q.name },
+    { nba_decisions = aws_sqs_queue.nba_decisions_dlq.name },
   )
 }
 
