@@ -96,7 +96,7 @@ outcomes AS (
 ),
 steps AS (
   SELECT s.customer_id, s.step,
-         COALESCE(o.registered, false) AS registered,
+         COALESCE(o.registered, false) AS did_register,
          ARRAY_AGG(s.asset_id || ':' || s.channel) OVER (
            PARTITION BY s.customer_id ORDER BY s.step ROWS UNBOUNDED PRECEDING
          ) AS sequence
@@ -108,18 +108,18 @@ JOURNEY_SQL = (
     JOURNEY_BASE_SQL
     + f"""
 SELECT ARRAY_JOIN(sequence, '>') AS journey, step AS steps,
-       COUNT(*) AS reached, COUNT_IF(registered) AS registered
+       COUNT(*) AS reached, COUNT_IF(did_register) AS registered
 FROM steps
 GROUP BY sequence, step
 HAVING COUNT(*) >= {JOURNEY_MIN_PEOPLE}
-ORDER BY CAST(COUNT_IF(registered) AS double) / COUNT(*) DESC
+ORDER BY CAST(COUNT_IF(did_register) AS double) / COUNT(*) DESC
 LIMIT {JOURNEY_LIMIT}
 """
 )
 JOURNEY_STEP_SQL = (
     JOURNEY_BASE_SQL
     + """
-SELECT step AS steps, COUNT(*) AS reached, COUNT_IF(registered) AS registered
+SELECT step AS steps, COUNT(*) AS reached, COUNT_IF(did_register) AS registered
 FROM steps GROUP BY step ORDER BY step
 """
 )
