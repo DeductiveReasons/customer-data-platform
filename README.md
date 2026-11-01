@@ -62,6 +62,12 @@ flowchart TD
     M --> N3[SQS] --> O3[Other APIs webhook]
 ```
 
+## Daily runs and the full-year simulation
+
+The model runs once a day. Each run updates the content bandit, saves results and a 14-day send forecast, adds about 200 new leads, delivers direct mail that is due after its 7-day lead time, and decides for everyone who is due. Set `daily_run_enabled=false` to stop the schedule.
+
+`scripts/simulate_year.py` runs 365 days in one process with the same decision, bandit and outcome code, then loads the results into AWS. That takes under an hour, where the live pipeline would take many hours. Its messages do not pass through the queues and dummy endpoints.
+
 ## Deploy
 
 Requires Terraform 1.6+, the AWS CLI and AWS credentials. Deploying creates billable resources.

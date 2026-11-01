@@ -13,6 +13,7 @@ import gzip
 import json
 import os
 import random
+import subprocess
 import sys
 import time
 from decimal import Decimal
@@ -277,7 +278,30 @@ def run(leads, days):
     return by_id, model, history, email_rows, mail_rows, snapshots, pending
 
 
+def refresh_credentials():
+    """The simulation can outlast temporary credentials, so get fresh ones before writing to AWS."""
+    profile = os.environ.get("CDP_AWS_PROFILE")
+    if not profile:
+        return
+    command = os.environ.get("CDP_AWS_CLI", "aws")
+    output = subprocess.run(
+        [command, "configure", "export-credentials", "--profile", profile, "--format", "process"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    credentials = json.loads(output)
+    os.environ["AWS_ACCESS_KEY_ID"] = credentials["AccessKeyId"]
+    os.environ["AWS_SECRET_ACCESS_KEY"] = credentials["SecretAccessKey"]
+    os.environ["AWS_SESSION_TOKEN"] = credentials.get("SessionToken", "")
+    boto3.setup_default_session()
+
+
 def _put_rows(s3, bucket, prefix, rows):
+    # A previous attempt may have written more files than this one will replace.
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{prefix}year-run-"):
+        for item in page.get("Contents", []):
+            s3.delete_object(Bucket=bucket, Key=item["Key"])
     count = 0
     for start in range(0, len(rows), ROWS_PER_FILE):
         part = rows[start : start + ROWS_PER_FILE]
@@ -298,6 +322,46 @@ def profile_item(lead):
 def link_items(lead):
     identifiers = identity.identifiers({"user_id": lead.id, "email": lead.traits.get("email")})
     return [{"pk": f"ID#{identifier}", "sk": "LINK", "customer_id": lead.id} for identifier in identifiers]
+
+
+def clear_scheduled_rows(table_name):
+    """Remove mail and registrations scheduled by an earlier attempt."""
+    condition = boto3.dynamodb.conditions.Attr("pk").begins_with("MAILDUE#") | boto3.dynamodb.conditions.Attr("pk").begins_with("REGDUE#")
+
+    def segment(number):
+        table = boto3.resource("dynamodb").Table(table_name)
+        removed = 0
+        kwargs = {"Segment": number, "TotalSegments": 12, "FilterExpression": condition, "ProjectionExpression": "pk, sk"}
+        with table.batch_writer() as batch:
+            while True:
+                page = table.scan(**kwargs)
+                for item in page["Items"]:
+                    batch.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
+                    removed += 1
+                if "LastEvaluatedKey" not in page:
+                    return removed
+                kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+        return sum(pool.map(segment, range(12)))
+
+
+def restore_consent(leads, bucket):
+    """Undo unsubscribes written by an earlier attempt at this year, using its uploaded results."""
+    s3 = boto3.client("s3")
+    by_id = {lead.id: lead for lead in leads}
+    restored = 0
+    for prefix in ("feedback/email/year-run-", "feedback/direct_mail/year-run-"):
+        for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+            for item in page.get("Contents", []):
+                data = gzip.decompress(s3.get_object(Bucket=bucket, Key=item["Key"])["Body"].read())
+                for line in data.decode().splitlines():
+                    row = json.loads(line)
+                    lead = by_id.get(row["customer_id"])
+                    if row.get("unsubscribed") and lead is not None:
+                        lead.consent[row["channel"]] = True
+                        restored += 1
+    return restored
 
 
 def write_table(table_name, leads, days, pending):
@@ -330,8 +394,9 @@ def write_table(table_name, leads, days, pending):
             fields["outcome"] = outcome
             items.append({"pk": f"MAILDUE#{day}", "sk": message["message_id"], "feedback": json.dumps(fields)})
     for day, entries in pending["registrations"].items():
-        for lead in entries:
-            items.append({"pk": f"REGDUE#{day}", "sk": lead.id, "customer_id": lead.id})
+        # Someone can engage with two messages and have both registrations land on one day.
+        for lead_id in sorted({lead.id for lead in entries}):
+            items.append({"pk": f"REGDUE#{day}", "sk": lead_id, "customer_id": lead_id})
 
     def write(chunk):
         table = boto3.resource("dynamodb").Table(table_name)
@@ -380,11 +445,15 @@ def main():
     days = int(arguments[2]) if len(arguments) > 2 else 365
     import boto3.dynamodb.conditions  # noqa: F401
 
-    leads = read_leads(table_name)
+    # Only the original leads. Daily new leads are added again during the run, and a stable
+    # order means a repeat of this run makes the same choices.
+    leads = sorted((lead for lead in read_leads(table_name) if lead.id.startswith("sample-")), key=lambda lead: lead.id)
     print(f"read {len(leads)} existing leads", flush=True)
+    print(f"restored {restore_consent(leads, bucket)} unsubscribes from an earlier attempt", flush=True)
     by_id, model, history, email_rows, mail_rows, snapshots, pending = run(leads, days)
     summarize(snapshots, history, email_rows, mail_rows)
 
+    refresh_credentials()
     s3 = boto3.client("s3")
     for prefix, rows in (
         ("history/", history),
@@ -405,6 +474,8 @@ def main():
         Body=json.dumps(model).encode(),
         ContentType="application/json",
     )
+    refresh_credentials()
+    print(f"cleared {clear_scheduled_rows(table_name)} scheduled rows", flush=True)
     print(f"wrote {write_table(table_name, by_id, days, pending)} table records", flush=True)
 
 
