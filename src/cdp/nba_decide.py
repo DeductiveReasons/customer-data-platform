@@ -12,7 +12,7 @@ from cdp import approvals, nba
 
 ENDPOINT_PATHS = {"email": "/email", "direct_mail": "/direct-mail"}
 LEDGER_DAYS = 90
-MODEL_CACHE_SECONDS = 300
+MODEL_CACHE_SECONDS = 60
 _table = None
 _token = None
 _sqs = None

@@ -9,3 +9,4 @@ __pycache__/
 .env
 asset-preview.html
 *.tfplan
+scripts/baseline_model.json

@@ -57,8 +57,10 @@ def run(population, model, rng):
             )
             records.append(
                 {
+                    "customer_id": person["user_id"],
                     "asset_id": message["asset_id"],
                     "image_theme": message["image_theme"],
+                    "content_selection": message["content_selection"],
                     "features": message["features"],
                     **outcome,
                 }

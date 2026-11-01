@@ -4,6 +4,8 @@ import json
 import math
 import os
 
+from cdp import bandit
+
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "content_model.json")
 VARIANTS = 10
 EXPLORATION_RATE = 0.1
@@ -38,6 +40,7 @@ THEMES = {
 def _uniform():
     zeros = [0.0] * len(FEATURES)
     return {
+        "type": "random",
         "version": "untrained",
         "features": FEATURES,
         "means": zeros,
@@ -78,6 +81,8 @@ def image_url(image_id):
 
 
 def score(model, theme, features):
+    if model.get("type") == "bandit":
+        return bandit.expected(model, theme, features)
     weights = model["actions"].get(theme)
     if weights is None:
         return None
@@ -93,14 +98,31 @@ def score(model, theme, features):
 
 def choose(customer_id, touch, features, state, model, rng, is_blocked=lambda image_id: False):
     """Pick a theme with the model, then a variant that differs from the last image shown."""
-    scored = [(score(model, theme, features), theme) for theme in THEMES]
-    scored = [item for item in scored if item[0] is not None]
-    if rng.random() < EXPLORATION_RATE or not scored:
+    is_bandit = model.get("type") == "bandit"
+    if model.get("type") == "random":
         theme = rng.choice(list(THEMES))
-        selection = "explore"
+        selection = "random"
+    elif rng.random() < EXPLORATION_RATE:
+        # For the bandit this is a random holdout, which gives a fair comparison for its results.
+        theme = rng.choice(list(THEMES))
+        selection = "holdout" if is_bandit else "explore"
+    elif is_bandit:
+        if hasattr(rng, "gauss"):
+            theme = bandit.choose_arm(model, features, rng)
+            selection = "bandit"
+        else:
+            # Reporting uses the current best estimate, without random sampling.
+            theme = max(THEMES, key=lambda name: score(model, name, features) or 0.0)
+            selection = "best"
     else:
-        theme = max(scored)[1]
-        selection = "best"
+        scored = [(score(model, name, features), name) for name in THEMES]
+        scored = [item for item in scored if item[0] is not None]
+        if scored:
+            theme = max(scored)[1]
+            selection = "best"
+        else:
+            theme = rng.choice(list(THEMES))
+            selection = "explore"
     digest = hashlib.sha256(f"{customer_id}|{touch}".encode()).digest()
     variant = digest[0] % VARIANTS + 1
     image_id = f"{theme}-{variant:02d}"

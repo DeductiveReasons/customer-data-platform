@@ -4,6 +4,7 @@ locals {
   nba_lambdas = {
     nba-scan = {
       handler = "cdp.nba_scan.handler"
+      memory  = 1024
       timeout = 900
       environment = {
         TABLE_NAME         = aws_dynamodb_table.profiles.name
@@ -24,6 +25,7 @@ locals {
     }
     nba-decide = {
       handler = "cdp.nba_decide.handler"
+      memory  = 512
       timeout = 60
       environment = {
         TABLE_NAME          = aws_dynamodb_table.profiles.name
@@ -183,7 +185,7 @@ resource "aws_lambda_event_source_mapping" "nba_feedback" {
   function_response_types = ["ReportBatchItemFailures"]
 
   scaling_config {
-    maximum_concurrency = 10
+    maximum_concurrency = 40
   }
 }
 
@@ -231,7 +233,7 @@ resource "aws_lambda_event_source_mapping" "nba_decide" {
   function_response_types = ["ReportBatchItemFailures"]
 
   scaling_config {
-    maximum_concurrency = 10
+    maximum_concurrency = 40
   }
 }
 

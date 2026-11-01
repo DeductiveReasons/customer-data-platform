@@ -157,6 +157,16 @@ class VariationTests(unittest.TestCase):
         self.set_status.assert_called_once_with(good, "pending_approval")
 
 
+class ModelPageTests(unittest.TestCase):
+    def test_model_card_requires_password(self):
+        with mock.patch.object(webapp, "_get_token", return_value="secret"):
+            self.assertEqual(webapp.handler(request("/api/model", token=None), None)["statusCode"], 401)
+            body = json.loads(webapp.handler(request("/api/model"), None)["body"])
+        self.assertGreater(body["test_metrics"]["auc"], 0.6)
+        self.assertTrue(body["importance"])
+        self.assertEqual(len(body["calibration"]), 10)
+
+
 class JourneyTests(unittest.TestCase):
     def test_returns_journeys_and_requires_password(self):
         webapp._cache.clear()
@@ -224,8 +234,7 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual({offer["channel"] for offer in body["offers"]}, {"email"})
         values = [offer["expected_value"] for offer in body["offers"]]
         self.assertEqual(values, sorted(values, reverse=True))
-        scored_themes = webapp.content.BUNDLED_MODEL["actions"]
-        self.assertEqual(len(body["themes"]), len(scored_themes))
+        self.assertEqual(len(body["themes"]), len(webapp.content.THEMES))
         message = body["history"][0]["content_html"]
         self.assertIn("/images/yoga-03.jpg", message)
         self.assertNotIn("<script>", message)

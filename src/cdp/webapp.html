@@ -72,7 +72,7 @@ a{color:var(--accent)}
   <main id="view" tabindex="-1"></main>
 </div>
 <script>
-const VIEWS={overview:'Overview',performance:'Performance',variations:'Digital assets',journeys:'Journeys',content:'Image library',people:'People',monitoring:'Monitoring',usage:'Usage and costs'};
+const VIEWS={overview:'Overview',performance:'Performance',variations:'Digital assets',journeys:'Journeys',model:'Model',content:'Image library',people:'People',monitoring:'Monitoring',usage:'Usage and costs'};
 const STATUSES={active:'Active journey',onboarding_due:'Onboarding due',registered:'Registered',journey_complete:'Journey complete',no_marketing_consent:'No marketing consent',no_contact_option:'No contact option'};
 const LABELS={email:'Email',direct_mail:'Direct mail',no_contact:'No contact'};
 const when=v=>{if(!v)return '–';const d=new Date(v);return isNaN(d)?v:d.toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})};
@@ -131,6 +131,23 @@ const render={
    {t:'Asset',f:r=>assetName(r.asset_id)},{t:'Channel',f:r=>LABELS[r.channel]||r.channel},
    {t:'People',n:1,f:r=>num(r.people)},{t:'Avg. propensity',n:1,f:r=>(100*Number(r.avg_propensity)).toFixed(1)+'%'},
    {t:'Avg. expected value',n:1,f:r=>'$'+Number(r.avg_expected_value).toFixed(2)}],d.next_actions)}</div>`;
+ },
+ async model(){
+  const m=await api('/api/model'),t=m.test_metrics,b=m.baseline_metrics;
+  const maxI=Math.max(.001,...m.importance.map(i=>i.share));
+  const money=v=>v==null?'–':'$'+Number(v).toFixed(2);
+  return `<h1>Next best action model</h1><p class="sub">${esc(m.algorithm)}. Version ${esc(m.version)}. ${esc(m.training_data)}</p>
+  <div class="tiles"><div class="tile"><b>${t.auc.toFixed(3)}</b><span>Test AUC, previous model ${b.auc.toFixed(3)}</span></div>
+  <div class="tile"><b>${t.log_loss.toFixed(4)}</b><span>Test log loss, previous ${b.log_loss.toFixed(4)}</span></div>
+  <div class="tile"><b>${num(m.trees)}</b><span>Decision trees</span></div>
+  <div class="tile"><b>${num(m.training_people)}</b><span>Simulated people in training</span></div>
+  <div class="tile"><b>${num(m.training_rows.train+m.training_rows.validation+m.training_rows.test)}</b><span>Message records</span></div></div>
+  ${m.policy_comparison?`<div class="panel"><h2>Decision comparison on new simulated people</h2>${table([{t:'Approach',k:'policy'},{t:'Registered',n:1,f:r=>num(r.registered)},{t:'Rate',n:1,f:r=>(100*r.registration_rate).toFixed(1)+'%'},{t:'Messages',n:1,f:r=>num(r.messages)},{t:'Assumed cost',n:1,f:r=>money(r.cost)},{t:'Cost per registration',n:1,f:r=>money(r.cost_per_registration)}],m.policy_comparison)}</div>`:''}
+  <div class="panel"><h2>Content bandit</h2><p class="muted">Contextual Thompson sampling picks the image theme. A random 10% holdout measures whether it is doing better than chance. Version ${esc(m.bandit_version||'–')}.</p>
+  ${table([{t:'Group',f:r=>r.selection==='bandit'?'Bandit':r.selection==='holdout'?'Random holdout':r.selection},{t:'Messages',n:1,f:r=>num(r.messages)},{t:'Click rate',n:1,f:r=>pct(r.clicked,r.messages)},{t:'Registration rate',n:1,f:r=>pct(r.registered,r.messages)}],m.bandit_selections||[],{empty:'No bandit results yet.'})}
+  <h2 style="margin-top:16px">What the bandit has learned</h2>${table([{t:'Image theme',k:'label'},{t:'Messages',n:1,f:r=>num(r.messages)},{t:'Clicks',n:1,f:r=>num(r.clicks)},{t:'Click rate',n:1,f:r=>pct(r.clicks,r.messages)}],m.bandit_arms||[],{empty:'The bandit has not updated yet.'})}</div>
+  <div class="panel"><h2>What drives predictions</h2>${m.importance.map(i=>`<div class="bar"><span>${esc(i.feature.replace(/_/g,' '))}</span><i style="width:${(100*i.share/maxI).toFixed(1)}%"></i><em>${(100*i.share).toFixed(1)}%</em></div>`).join('')}</div>
+  <div class="panel"><h2>Calibration on test people</h2><p class="muted">Predicted and actual registration rates should be close in each band.</p>${table([{t:'Band',f:r=>m.calibration.indexOf(r)+1},{t:'Predicted',n:1,f:r=>(100*r.predicted).toFixed(1)+'%'},{t:'Actual',n:1,f:r=>(100*r.actual).toFixed(1)+'%'},{t:'Records',n:1,f:r=>num(r.rows)}],m.calibration)}</div>`;
  },
  async journeys(params={}){
   const d=await api('/api/journeys'),len=Number(params.len)||1;
@@ -191,7 +208,7 @@ const render={
   return `<h1>People</h1><p class="sub">Simulated people. Shows up to ${d.limit}, highest expected value first. Select a row for history.</p>
   <div class="panel"><form class="filters" id="cf"><label>Status <select id="st"><option value="">All</option>${Object.entries(STATUSES).map(([k,v])=>`<option value="${k}" ${params.status===k?'selected':''}>${esc(v)}</option>`).join('')}</select></label>
   <label>Customer ID <input id="cid" value="${esc(params.customer_id||'')}"></label><button class="small">Search</button></form>
-  ${table([{t:'Customer',k:'customer_id'},{t:'Name',f:r=>`${r.first_name||''} ${r.last_name||''}`},{t:'Status',f:r=>STATUSES[r.status]||r.status},
+  ${table([{t:'Customer',k:'customer_id'},{t:'Name',f:r=>`${r.first_name||''} ${r.last_name||''}`},{t:'Employer',k:'employer_name'},{t:'Status',f:r=>STATUSES[r.status]||r.status},
    {t:'Touches',k:'touches',n:1},{t:'Clicks',k:'clicks',n:1},{t:'Registered',f:r=>r.registered==='true'?'Yes':'No'},
    {t:'Next best action',f:r=>LABELS[r.next_best_action]||'–'},{t:'Next action time',f:r=>when(r.next_best_action_time)},{t:'Asset',f:r=>r.next_best_asset?assetName(r.next_best_asset):'–'},{t:'Next image',h:r=>r.next_best_image?`<img class="thumb" src="/images/${esc(r.next_best_image)}.jpg" alt="${esc(r.next_best_image)}">`:'–'},
    {t:'Propensity',n:1,f:r=>r.next_best_propensity?(100*Number(r.next_best_propensity)).toFixed(1)+'%':'–'}],d.people,{link:'customer_id',empty:'No matching people.'})}</div>`;
@@ -230,6 +247,7 @@ const render={
   <div class="panel"><h2>Profile</h2><dl class="details">
    ${detail('First name',u.first_name)}${detail('Last name',u.last_name)}${detail('Email',u.email)}${detail('Address',[u.address,u.city,u.state,u.postal_code].filter(Boolean).join(', '))}${detail('Age',u.age)}${detail('Member for',u.tenure_months?u.tenure_months+' months':null)}
    ${detail('App sessions, 30 days',u.app_sessions_30d)}${detail('Days since active',u.days_since_active)}${detail('Email open rate',p100(u.email_open_rate))}${detail('Wellness member',u.wellness_member==='1'?'Yes':'No')}
+   ${detail('Employer',u.employer_name)}${detail('Industry',u.employer_industry?u.employer_industry.replace(/_/g,' '):null)}${detail('Employer size',u.employer_employees?num(u.employer_employees)+' people':null)}${detail('Employer wellness tier',u.employer_wellness_tier)}${detail('Fitness subsidy',u.employer_fitness_subsidy==='1'?'Yes':'No')}${detail('Employer participation',p100(u.employer_participation_rate))}${detail('Remote share',p100(u.employer_remote_share))}
    ${detail('Marketing consent',yn(u.consent_marketing))}${detail('Email consent',yn(u.consent_email))}${detail('Direct mail consent',yn(u.consent_direct_mail))}${detail('Model',u.model_version)}
   </dl></div>
   <div class="panel"><h2>Offer propensity scores, right now</h2>${table([{t:'Asset',f:r=>assetName(r.asset_id)},{t:'Channel',f:r=>LABELS[r.channel]||r.channel},{t:'Sign-up propensity',n:1,f:r=>p100(r.propensity)},{t:'Expected value',n:1,f:r=>'$'+Number(r.expected_value).toFixed(2)}],d.offers,{empty:'No scores, because this person has not given consent for any channel.'})}</div>

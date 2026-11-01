@@ -1,6 +1,7 @@
 import gzip
 import io
 import json
+import math
 import os
 import random
 import sys
@@ -23,9 +24,9 @@ except ImportError:
     sys.modules["boto3.dynamodb"] = types.ModuleType("boto3.dynamodb")
     sys.modules["boto3.dynamodb.conditions"] = conditions
 
-from cdp import approvals, archive, assets, content, nba, nba_decide, nba_export, nba_feedback, nba_retrain, nba_scan, receiver, simulator, training  # noqa: E402
+from cdp import approvals, archive, assets, bandit, content, nba, nba_decide, nba_export, nba_feedback, nba_retrain, nba_scan, receiver, simulator, training  # noqa: E402
 from journey import run  # noqa: E402
-from sample_data import generate, to_events  # noqa: E402
+from sample_data import generate, generate_employers, to_events  # noqa: E402
 from test_cdp import ClientError  # noqa: E402
 
 TRAITS = {
@@ -178,6 +179,92 @@ class ApprovalTests(unittest.TestCase):
             approvals.variation_id(a, c, image["id"]) for a, c, image in approvals.all_variations()
         }
         self.assertIsNone(nba.decide("c1", TRAITS, ALL_CONSENT, {}, rng=NoExplore(), pending=pending))
+
+
+class BanditTests(unittest.TestCase):
+    ARMS = ("good", "bad", "context")
+
+    def features(self, sessions=5.0):
+        return {"app_sessions_30d": sessions}
+
+    def trained(self, rounds=400):
+        rng = random.Random(1)
+        stats = bandit.new_stats(self.ARMS)
+        for _ in range(rounds):
+            bandit.add(stats, "good", self.features(), rng.random() < 0.5)
+            bandit.add(stats, "bad", self.features(), rng.random() < 0.05)
+        return bandit.to_model(stats, "v")
+
+    def test_learns_expected_click_rates(self):
+        model = self.trained()
+        self.assertAlmostEqual(bandit.expected(model, "good", self.features()), 0.5, delta=0.08)
+        self.assertAlmostEqual(bandit.expected(model, "bad", self.features()), 0.05, delta=0.05)
+
+    def test_prefers_winner_but_keeps_testing_uncertain_content(self):
+        model = self.trained()
+        rng = random.Random(2)
+        picks = [bandit.choose_arm(model, self.features(), rng) for _ in range(1000)]
+        self.assertGreater(picks.count("good"), picks.count("bad"))
+        self.assertLess(picks.count("bad"), 20)
+        self.assertGreater(picks.count("context"), 0)  # New content with no results is still tried.
+
+    def test_uses_the_persons_context(self):
+        rng = random.Random(3)
+        stats = bandit.new_stats(("active", "inactive"))
+        for _ in range(3000):
+            sessions = rng.choice([0.0, 12.0])
+            features = self.features(sessions)
+            bandit.add(stats, "active", features, rng.random() < (0.6 if sessions else 0.05))
+            bandit.add(stats, "inactive", features, rng.random() < (0.05 if sessions else 0.6))
+        model = bandit.to_model(stats, "v")
+        self.assertEqual(bandit.choose_arm(model, self.features(12.0), rng), "active")
+        self.assertEqual(bandit.choose_arm(model, self.features(0.0), rng), "inactive")
+
+    def test_choose_marks_bandit_and_holdout_messages(self):
+        model = {**bandit.to_model(bandit.new_stats(content.THEMES), "v")}
+        features = nba.features_for(TRAITS, {}, "email")
+        seen = {content.choose("c", str(i), features, {}, model, random.Random(i))["content_selection"] for i in range(200)}
+        self.assertEqual(seen, {"bandit", "holdout"})
+
+    def test_reporting_uses_no_random_sampling(self):
+        model = {**bandit.to_model(bandit.new_stats(content.THEMES), "v")}
+        features = nba.features_for(TRAITS, {}, "email")
+        self.assertEqual(content.choose("c", "1", features, {}, model, NoExplore())["content_selection"], "best")
+
+
+class GradientBoostingTests(unittest.TestCase):
+    TREE = {"f": [0, -1, -1], "t": [5.0, 0, 0], "l": [1, -1, -1], "r": [2, -1, -1], "d": [1, 0, 0], "v": [0, -1.0, 1.0]}
+    MODEL = {"type": "gbm", "version": "v", "features": ["x"], "trees": [TREE, TREE]}
+
+    def test_scores_trees_and_handles_missing_values(self):
+        self.assertAlmostEqual(nba.score_gbm(self.MODEL, [1.0]), 1 / (1 + math.exp(2)))
+        self.assertAlmostEqual(nba.score_gbm(self.MODEL, [9.0]), 1 / (1 + math.exp(-2)))
+        self.assertAlmostEqual(nba.score_gbm(self.MODEL, [None]), 1 / (1 + math.exp(2)))
+
+    def test_bundled_model_is_a_trained_gbm(self):
+        self.assertEqual(nba.BUNDLED_MODEL["type"], "gbm")
+        self.assertEqual(nba.BUNDLED_MODEL["features"], nba.GBM_FEATURES)
+        self.assertGreater(len(nba.BUNDLED_MODEL["trees"]), 5)
+
+    def test_employer_changes_the_score(self):
+        low = {**TRAITS, "employer_fitness_subsidy": 0, "employer_wellness_tier": 0, "employer_participation_rate": 0.05}
+        high = {**TRAITS, "employer_fitness_subsidy": 1, "employer_wellness_tier": 3, "employer_participation_rate": 0.5}
+        scores = [
+            nba.propensity(nba.BUNDLED_MODEL, "success_story", nba.features_for(traits, {}, "email"))
+            for traits in (low, high)
+        ]
+        self.assertNotEqual(scores[0], scores[1])
+
+
+class EmployerTests(unittest.TestCase):
+    def test_employers_are_labelled_and_assigned(self):
+        employers = generate_employers()
+        self.assertEqual(len(employers), 500)
+        self.assertTrue(all("(fictional)" in employer["employer_name"] for employer in employers))
+        self.assertEqual(len({employer["employer_id"] for employer in employers}), 500)
+        person = generate(5)[0]["person"]
+        self.assertTrue(person["employer_id"].startswith("emp-"))
+        self.assertIn(person["employer_industry"], nba.INDUSTRIES)
 
 
 class SimulatorTests(unittest.TestCase):

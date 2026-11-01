@@ -25,6 +25,32 @@ THEME_EFFECT = {
 }
 
 
+def employer_effect(asset_id, f):
+    """Invented effects, including interactions a simple linear model cannot represent."""
+    subsidy = f.get("employer_fitness_subsidy", 0)
+    tier = f.get("employer_wellness_tier", 0)
+    participation = f.get("employer_participation_rate", 0.2)
+    employees = f.get("employer_employees", 500)
+    remote = f.get("employer_remote_share", 0.2)
+    sessions = f.get("app_sessions_30d", 0)
+    effect = 0.35 * subsidy + 0.15 * tier + 1.5 * (participation - 0.2)
+    if asset_id == "free_trial":
+        # A trial matters most when the employer does not already pay for fitness.
+        effect += 0.7 if not subsidy else -0.5
+    elif asset_id == "coach_consult":
+        if tier >= 2 and employees >= 1000:
+            effect += 0.9
+        if f.get("industry_healthcare") or f.get("industry_manufacturing"):
+            effect -= 0.4  # Shift work makes a booked session harder.
+    elif asset_id == "success_story":
+        if participation >= 0.3 and sessions < 5:
+            effect += 0.8
+    elif asset_id == "program_intro":
+        if f.get("touches", 0) == 0 and remote >= 0.5:
+            effect += 0.8
+    return effect
+
+
 def outcome_for(message_id, asset_id, features, theme=None):
     """Return what this person does with a message. Repeatable for a given message_id."""
     rng = random.Random(message_id)
@@ -37,10 +63,13 @@ def outcome_for(message_id, asset_id, features, theme=None):
     read = rng.random() < read_chance
 
     image_effect = THEME_EFFECT[theme](features) if theme in THEME_EFFECT else 0
-    click_chance = sigmoid(-1.7 + ASSET_EFFECT[asset_id](features) + image_effect - (0.5 if is_mail else 0))
+    employer = employer_effect(asset_id, features)
+    click_chance = sigmoid(-1.9 + ASSET_EFFECT[asset_id](features) + employer + image_effect - (0.5 if is_mail else 0))
     clicked = read and rng.random() < click_chance
 
-    register_chance = sigmoid(-0.8 + 0.6 * ASSET_EFFECT[asset_id](features) + 0.3 * features["wellness_member"])
+    register_chance = sigmoid(
+        -0.9 + 0.6 * ASSET_EFFECT[asset_id](features) + 0.5 * employer + 0.3 * features["wellness_member"]
+    )
     registered = clicked and rng.random() < register_chance
 
     unsubscribed = not clicked and rng.random() < 0.01 + 0.01 * features["touches"]

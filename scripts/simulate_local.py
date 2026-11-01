@@ -1,6 +1,7 @@
-"""Compares campaign policies through the full feedback loop, without AWS.
+"""Compares decision policies through the full feedback loop on new people, without AWS.
 
-Each policy runs on the same people, who were not used to train the starting model.
+Adds the results to src/cdp/model_card.json.
+Usage: python scripts/simulate_local.py [people]
 """
 import json
 import os
@@ -11,47 +12,82 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
-from cdp import content, nba, training  # noqa: E402
+from cdp import bandit, content, nba  # noqa: E402
 from journey import RandomPolicyRng, run  # noqa: E402
 from sample_data import generate  # noqa: E402
 from train_model import uniform_model  # noqa: E402
 
 
-def show(name, totals, people):
-    cost = totals["cost"]
+def summary(name, totals, people):
     registered = totals["registered"]
-    per = f"${cost / registered:.2f}" if registered else "n/a"
-    print(
-        f"{name:<28} registered {registered:>5} ({registered / people:.1%})  "
-        f"messages {totals['messages']:>6}  email {totals['email']:>6}  mail {totals['direct_mail']:>6}  "
-        f"cost ${cost:>9,.2f}  cost per sign-up {per}"
-    )
+    return {
+        "policy": name,
+        "people": people,
+        "registered": registered,
+        "registration_rate": round(registered / people, 4),
+        "messages": totals["messages"],
+        "email": totals["email"],
+        "direct_mail": totals["direct_mail"],
+        "cost": round(totals["cost"], 2),
+        "cost_per_registration": round(totals["cost"] / registered, 2) if registered else None,
+    }
+
+
+def run_bandit(population, rng, batch=2000):
+    """Run the bandit from no knowledge, updating it between batches as the live system does."""
+    stats = bandit.new_stats(content.THEMES)
+    model = {**nba.BUNDLED_MODEL, "content": bandit.to_model(stats, "start")}
+    totals = {}
+    selections = {}
+    for start in range(0, len(population), batch):
+        records, part = run(population[start : start + batch], model, rng)
+        for key, value in part.items():
+            totals[key] = totals.get(key, 0) + value
+        for record in records:
+            bandit.add(stats, record["image_theme"], record["features"], record["clicked"])
+            group = selections.setdefault(record["content_selection"], {"messages": 0, "clicked": 0, "registered": 0})
+            group["messages"] += 1
+            group["clicked"] += int(record["clicked"])
+            group["registered"] += int(record["registered"])
+        model = {**model, "content": bandit.to_model(stats, "learning")}
+    arms = {arm: {"messages": e["pulls"], "clicked": e["rewards"]} for arm, e in stats.items()}
+    return totals, selections, arms
 
 
 def main():
-    people = 10_000
+    people = int(sys.argv[1]) if len(sys.argv) > 1 else 20_000
+    # These people were not used for training, and every policy sees the same people.
     population = generate(people, seed=99)
+    with open(os.path.join(HERE, "baseline_model.json")) as source:
+        baseline = json.load(source)
+    policies = [
+        ("Random offer and image", uniform_model(), RandomPolicyRng(2)),
+        ("Previous logistic model", baseline, random.Random(3)),
+        ("LightGBM, no image model", {**nba.BUNDLED_MODEL, "content": content.uniform_model()}, random.Random(3)),
+        ("LightGBM, fixed image model", {**nba.BUNDLED_MODEL, "content": baseline["content"]}, random.Random(3)),
+    ]
+    results = []
+    for name, model, rng in policies:
+        _, totals = run(population, model, rng)
+        result = summary(name, totals, people)
+        results.append(result)
+        print(json.dumps(result), flush=True)
 
-    _, random_totals = run(population, uniform_model(), RandomPolicyRng(2))
-    show("Random asset and channel", random_totals, people)
+    totals, selections, arms = run_bandit(population, random.Random(3))
+    result = summary("LightGBM with content bandit", totals, people)
+    results.append(result)
+    print(json.dumps(result), flush=True)
+    print("bandit selections:", json.dumps(selections), flush=True)
+    print("bandit arms:", json.dumps(arms), flush=True)
 
-    records, first = run(population, nba.BUNDLED_MODEL, random.Random(3))
-    show("Starting model", first, people)
-
-    random_content = {**nba.BUNDLED_MODEL, "content": content.uniform_model()}
-    _, even = run(population, random_content, random.Random(3))
-    show("Same assets, untrained images", even, people)
-
-    # The next round trains on the feedback from the starting model's own campaign.
-    retrained, report = training.train(records, nba.FEATURES, "feedback-demo", previous=nba.BUNDLED_MODEL)
-    print("\nRetrain report:", json.dumps(report))
-    if retrained is None:
-        raise SystemExit("retrain produced no model")
-
-    _, second = run(generate(people, seed=123), retrained, random.Random(4))
-    show("Retrained, new people", second, people)
-    _, baseline = run(generate(people, seed=123), nba.BUNDLED_MODEL, random.Random(4))
-    show("Starting model, new people", baseline, people)
+    path = os.path.join(HERE, "..", "src", "cdp", "model_card.json")
+    with open(path) as source:
+        card = json.load(source)
+    card["policy_comparison"] = results
+    card["bandit_simulation"] = {"selections": selections, "arms": arms}
+    with open(path, "w") as output:
+        json.dump(card, output, indent=2)
+        output.write("\n")
 
 
 if __name__ == "__main__":

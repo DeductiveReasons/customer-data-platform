@@ -13,6 +13,8 @@ from cdp import approvals, assets, content, nba
 
 with open(os.path.join(os.path.dirname(__file__), "webapp.html"), encoding="utf-8") as page_file:
     PAGE = page_file.read()
+with open(os.path.join(os.path.dirname(__file__), "model_card.json"), encoding="utf-8") as card_file:
+    MODEL_CARD = json.load(card_file)
 
 CSP = (
     "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data: {host}; "
@@ -62,7 +64,7 @@ WHERE image_id IS NOT NULL
 GROUP BY image_theme, image_id
 """
 PEOPLE_COLUMNS = (
-    "customer_id, first_name, last_name, status, touches, opens, clicks, registered, "
+    "customer_id, first_name, last_name, employer_name, status, touches, opens, clicks, registered, "
     "next_best_action, next_best_action_time, no_contact_reason, next_best_asset, next_best_channel, "
     "next_best_propensity, next_best_expected_value, next_best_image"
 )
@@ -123,6 +125,15 @@ SELECT step AS steps, COUNT(*) AS reached, COUNT_IF(did_register) AS registered
 FROM steps GROUP BY step ORDER BY step
 """
 )
+BANDIT_SQL = """
+SELECT content_selection AS selection,
+       COUNT(DISTINCT message_id) AS messages,
+       COUNT(DISTINCT CASE WHEN clicked THEN message_id END) AS clicked,
+       COUNT(DISTINCT CASE WHEN registered THEN message_id END) AS registered
+FROM (SELECT * FROM email_engagement UNION ALL SELECT * FROM direct_mail_engagement)
+WHERE content_selection IS NOT NULL
+GROUP BY content_selection
+"""
 COST_CACHE_SECONDS = 3600  # Each Cost Explorer request costs about one cent.
 USAGE_DAYS = 30
 VARIATION_PAGE_SIZE = 12
@@ -246,6 +257,7 @@ def _endpoints():
         {"group": "Console", "method": "GET", "url": "/api/assets", "auth": "Password", "purpose": "Campaign asset names and previews"},
         {"group": "Console", "method": "GET", "url": "/api/variations", "auth": "Password", "purpose": "Browse every deliverable variation and its approval status"},
         {"group": "Console", "method": "POST", "url": "/api/variations/{id}/status", "auth": "Password", "purpose": "Approve a variation or set it to pending approval"},
+        {"group": "Console", "method": "GET", "url": "/api/model", "auth": "Password", "purpose": "Next best action model results and top features"},
         {"group": "Console", "method": "GET", "url": "/api/journeys", "auth": "Password", "purpose": "Most successful message sequences"},
         {"group": "Console", "method": "GET", "url": "/api/content", "auth": "Password", "purpose": "Image library results"},
         {"group": "Console", "method": "GET", "url": "/api/people", "auth": "Password", "purpose": "Search and filter people"},
@@ -378,6 +390,30 @@ def _set_variation_status(variation, body):
     return {"id": variation, "status": status}
 
 
+def _model_page():
+    """Add the bandit's live state and holdout comparison to the training results."""
+    current = _current_model().get("content") or content.BUNDLED_MODEL
+    arms = []
+    if current.get("type") == "bandit":
+        arms = [
+            {
+                "theme": theme,
+                "label": content.THEMES[theme]["label"],
+                "messages": entry["pulls"],
+                "clicks": entry["rewards"],
+            }
+            for theme, entry in current["arms"].items()
+            if theme in content.THEMES
+        ]
+        arms.sort(key=lambda item: item["messages"], reverse=True)
+    try:
+        selections = run_query(BANDIT_SQL)
+    except Exception as exc:
+        print(f"bandit comparison failed: {type(exc).__name__}")
+        selections = []
+    return {**MODEL_CARD, "bandit_version": current.get("version"), "bandit_arms": arms, "bandit_selections": selections}
+
+
 def _journeys():
     return {
         "journeys": run_query(JOURNEY_SQL),
@@ -430,6 +466,7 @@ def _number(value):
 def _scores(row, model):
     """Score every asset and image theme for this person, using the same logic as live decisions."""
     traits = {name: _number(row.get(name)) for name in nba.PROFILE_FEATURES}
+    traits["employer_industry"] = row.get("employer_industry")
     state = {name: _number(row.get(name)) or 0 for name in ("touches", "opens", "clicks")}
     channels = []
     if row.get("consent_marketing") == "true":
@@ -703,6 +740,8 @@ def _route(path, query):
         return _cached("usage", _usage)
     if path == "/api/variations":
         return _variations(query)
+    if path == "/api/model":
+        return _cached("model", _model_page)
     if path == "/api/journeys":
         return _cached("journeys", _journeys)
     if path == "/api/people":

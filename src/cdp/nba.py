@@ -10,19 +10,35 @@ from cdp import assets, content
 with open(os.path.join(os.path.dirname(__file__), "nba_model.json")) as model_file:
     BUNDLED_MODEL = json.load(model_file)
 
-FEATURES = [
+PROFILE_FEATURES = [
     "age",
     "tenure_months",
     "app_sessions_30d",
     "days_since_active",
     "email_open_rate",
     "wellness_member",
-    "touches",
-    "opens",
-    "clicks",
-    "is_direct_mail",
+    "employer_employees",
+    "employer_fitness_subsidy",
+    "employer_wellness_tier",
+    "employer_participation_rate",
+    "employer_remote_share",
 ]
-PROFILE_FEATURES = FEATURES[:6]
+INDUSTRIES = [
+    "technology",
+    "healthcare",
+    "manufacturing",
+    "finance",
+    "education",
+    "retail",
+    "logistics",
+    "public_sector",
+]
+FEATURES = (
+    PROFILE_FEATURES
+    + [f"industry_{industry}" for industry in INDUSTRIES]
+    + ["touches", "opens", "clicks", "is_direct_mail"]
+)
+GBM_FEATURES = FEATURES + [f"asset_{asset_id}" for asset_id in assets.SIGNUP_ASSETS]
 
 # Illustrative business assumptions: replace these with real values before using them for decisions.
 REGISTRATION_VALUE = 120.0
@@ -40,6 +56,8 @@ def features_for(traits, state, channel):
     for name in PROFILE_FEATURES:
         value = traits.get(name)
         values[name] = float(value) if isinstance(value, (int, float)) else None
+    for industry in INDUSTRIES:
+        values[f"industry_{industry}"] = 1.0 if traits.get("employer_industry") == industry else 0.0
     values["touches"] = float(state.get("touches", 0))
     values["opens"] = float(state.get("opens", 0))
     values["clicks"] = float(state.get("clicks", 0))
@@ -76,8 +94,35 @@ def next_action_time(traits, state, channel, now=None):
     return candidate.astimezone(timezone.utc).isoformat()
 
 
+def gbm_row(features, asset_id):
+    """Return the model's inputs in order. None means the value is missing."""
+    row = [features.get(name) for name in FEATURES]
+    row.extend(1.0 if other == asset_id else 0.0 for other in assets.SIGNUP_ASSETS)
+    return row
+
+
+def score_gbm(model, row):
+    """Score gradient-boosted trees with no dependencies, so it runs in a small Lambda."""
+    total = 0.0
+    for tree in model["trees"]:
+        features, thresholds, lefts, rights, default_left = tree["f"], tree["t"], tree["l"], tree["r"], tree["d"]
+        node = 0
+        while features[node] >= 0:
+            value = row[features[node]]
+            if value is None:
+                node = lefts[node] if default_left[node] else rights[node]
+            elif value <= thresholds[node]:
+                node = lefts[node]
+            else:
+                node = rights[node]
+        total += tree["v"][node]
+    return 1 / (1 + math.exp(-max(min(total, 30), -30)))
+
+
 def propensity(model, asset_id, features):
     """Return the modeled chance of registering, or None if the asset has no model yet."""
+    if model.get("type") == "gbm":
+        return score_gbm(model, gbm_row(features, asset_id))
     weights = model["actions"].get(asset_id)
     if weights is None:
         return None

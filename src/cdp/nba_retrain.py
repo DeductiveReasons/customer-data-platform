@@ -1,4 +1,4 @@
-"""Scheduled or manual handler: retrains models from feedback and publishes the result."""
+"""Scheduled or manual handler: updates the content bandit from all recorded feedback."""
 import gzip
 import json
 import os
@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 
 import boto3
 
-from cdp import content, nba, training
+from cdp import bandit, content, nba
 
-MAX_ROWS = 40_000
+MAX_ROWS = 400_000
 
 
 def load_records(s3, bucket, prefix):
@@ -41,16 +41,13 @@ def handler(_event, _context):
     records = load_records(s3, bucket, os.environ["FEEDBACK_PREFIX"])
     version = "feedback-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     current = _current_model(s3, bucket, key)
-    model, report = training.train(records, nba.FEATURES, version, previous=current)
-    previous_content = current.get("content") or content.BUNDLED_MODEL
-    content_model, content_report = training.train(
-        records, content.FEATURES, version, previous=previous_content, key="image_theme", label="clicked"
-    )
-    report = {"assets": report, "content": content_report}
+    # The next best action model is LightGBM and is trained offline with scripts/train_model.py.
+    stats = bandit.new_stats(content.THEMES)
+    for record in records:
+        bandit.add(stats, record.get("image_theme"), record["features"], record.get("clicked"))
+    content_model = bandit.to_model(stats, version)
+    report = {arm: {"pulls": entry["pulls"], "clicks": entry["rewards"]} for arm, entry in stats.items()}
     print(json.dumps({"rows": len(records), "report": report}))
-    if model is None and content_model is None:
-        return {"published": False, "rows": len(records), "report": report}
-    model = model or current
-    model["content"] = content_model or previous_content
+    model = {**current, "content": content_model}
     s3.put_object(Bucket=bucket, Key=key, Body=json.dumps(model).encode(), ContentType="application/json")
     return {"published": True, "version": version, "rows": len(records), "report": report}
