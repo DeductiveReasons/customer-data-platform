@@ -45,6 +45,11 @@ REGISTRATION_VALUE = 120.0
 CHANNEL_COST = {"email": 0.02, "direct_mail": 1.25}
 MAX_TOUCHES = 4
 MIN_DAYS_BETWEEN_SCANS = 7
+DIRECT_MAIL_LEAD_DAYS = 7
+EMAIL_GAP_DAYS = 3  # Days before the next decision after an email.
+MAIL_RESPONSE_DAYS = 7  # Days to allow for a response after direct mail is delivered.
+NO_CONTACT_RECHECK_DAYS = 30
+NEVER_DUE = 9999
 # Standard-time UTC offsets, so these times can be an hour off during daylight saving time.
 STATE_UTC_OFFSET = {"CA": -8, "WA": -8, "CO": -7, "TX": -6, "IL": -6, "NY": -5, "FL": -5, "OH": -5}
 DEFAULT_UTC_OFFSET = -5
@@ -117,6 +122,20 @@ def score_gbm(model, row):
                 node = rights[node]
         total += tree["v"][node]
     return 1 / (1 + math.exp(-max(min(total, 30), -30)))
+
+
+def send_time_on(traits, channel, send_date):
+    """Return the send time in UTC for an ISO date, at the person's best local hour."""
+    local_zone = timezone(timedelta(hours=STATE_UTC_OFFSET.get(traits.get("state"), DEFAULT_UTC_OFFSET)))
+    year, month, day = (int(part) for part in send_date.split("-"))
+    local = datetime(year, month, day, send_hour(traits, channel), tzinfo=local_zone)
+    return local.astimezone(timezone.utc).isoformat()
+
+
+def next_due_after_send(channel, day):
+    if channel == "direct_mail":
+        return day + DIRECT_MAIL_LEAD_DAYS + MAIL_RESPONSE_DAYS
+    return day + EMAIL_GAP_DAYS
 
 
 def propensity(model, asset_id, features):

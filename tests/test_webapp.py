@@ -167,6 +167,86 @@ class ModelPageTests(unittest.TestCase):
         self.assertEqual(len(body["calibration"]), 10)
 
 
+class InsightTests(unittest.TestCase):
+    def rows(self, a, b):
+        return [
+            {"name": "a", "messages": "1000", "clicked": str(a), "registered": "1"},
+            {"name": "b", "messages": "1000", "clicked": str(b), "registered": "1"},
+        ]
+
+    def test_large_difference_is_a_clear_winner(self):
+        result = webapp.compare(self.rows(200, 100), "clicked")
+        self.assertEqual((result["winner"], result["verdict"]), ("a", "clear winner"))
+        self.assertEqual(result["lift_over_runner_up"], 1.0)
+
+    def test_small_difference_is_not_called_a_winner(self):
+        self.assertEqual(webapp.compare(self.rows(103, 100), "clicked")["verdict"], "no clear winner")
+
+    def test_small_samples_cannot_win(self):
+        rows = [
+            {"name": "tiny", "messages": "20", "clicked": "20", "registered": "0"},
+            {"name": "a", "messages": "1000", "clicked": "100", "registered": "0"},
+            {"name": "b", "messages": "1000", "clicked": "90", "registered": "0"},
+        ]
+        result = webapp.compare(rows, "clicked")
+        self.assertEqual(result["winner"], "a")
+        self.assertEqual(result["rows"][0]["name"], "tiny")
+
+    def test_segments_get_their_own_winners(self):
+        rows = [
+            {"name": "x|a", "messages": "1000", "clicked": "300", "registered": "0"},
+            {"name": "x|b", "messages": "1000", "clicked": "100", "registered": "0"},
+            {"name": "y|a", "messages": "1000", "clicked": "100", "registered": "0"},
+            {"name": "y|b", "messages": "1000", "clicked": "300", "registered": "0"},
+        ]
+        result = {r["segment"]: r["winner"] for r in webapp.segment_winners(rows, "clicked")}
+        self.assertEqual(result, {"x": "a", "y": "b"})
+
+
+class BanditPageTests(unittest.TestCase):
+    def test_combines_bandit_and_holdout_results(self):
+        webapp._cache.clear()
+        self.addCleanup(webapp._cache.clear)
+        selections = [
+            {"name": "bandit", "messages": "9000", "clicked": "1800", "registered": "900"},
+            {"name": "holdout", "messages": "1000", "clicked": "120", "registered": "60"},
+        ]
+        themes = [
+            {"theme": "yoga", "selection": "bandit", "messages": "100", "clicked": "20", "registered": "2"},
+            {"theme": "yoga", "selection": "holdout", "messages": "10", "clicked": "1", "registered": "0"},
+        ]
+        days = [{"day": "0", "selection": "bandit", "messages": "100", "clicked": "10", "registered": "1"}]
+        with mock.patch.object(webapp, "_get_token", return_value="secret"), mock.patch.object(
+            webapp, "_current_model", return_value=webapp.nba.BUNDLED_MODEL
+        ), mock.patch.object(webapp, "run_query", side_effect=[selections, days, [], themes]):
+            self.assertEqual(webapp.handler(request("/api/bandit", token=None), None)["statusCode"], 401)
+            body = json.loads(webapp.handler(request("/api/bandit"), None)["body"])
+        self.assertEqual((body["comparison"]["winner"], body["comparison"]["verdict"]), ("bandit", "clear winner"))
+        self.assertEqual(body["themes"][0]["bandit_messages"], 100)
+        self.assertEqual(body["themes"][0]["holdout_clicked"], 1)
+
+
+class DailyPageTests(unittest.TestCase):
+    def test_requires_password_and_combines_results(self):
+        webapp._cache.clear()
+        self.addCleanup(webapp._cache.clear)
+        boto = mock.Mock()
+        boto.client.return_value.get_paginator.return_value.paginate.return_value = [{"Contents": [{"Key": "k1"}, {"Key": "k2"}]}]
+        boto.client.return_value.get_object.side_effect = [
+            {"Body": io.BytesIO(b'{"day": 2}')},
+            {"Body": io.BytesIO(b'{"day": 1}')},
+        ]
+        rows = [{"day": "1", "channel": "email", "sends": "5"}]
+        with mock.patch.object(webapp, "_get_token", return_value="secret"), mock.patch.object(
+            webapp, "boto3", boto
+        ), mock.patch.object(webapp, "run_query", return_value=rows), mock.patch.dict(os.environ, {"IMAGE_BUCKET": "b"}):
+            self.assertEqual(webapp.handler(request("/api/daily", token=None), None)["statusCode"], 401)
+            body = json.loads(webapp.handler(request("/api/daily"), None)["body"])
+        self.assertEqual([s["day"] for s in body["snapshots"]], [1, 2])
+        self.assertEqual(body["actual_sends"], rows)
+        self.assertEqual(body["lead_days"], 7)
+
+
 class JourneyTests(unittest.TestCase):
     def test_returns_journeys_and_requires_password(self):
         webapp._cache.clear()

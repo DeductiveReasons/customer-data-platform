@@ -1,16 +1,12 @@
-"""SQS handler: records engagement, saves it for retraining and requests the next decision."""
+"""SQS handler: records engagement and saves it for learning. The next decision waits for the daily run."""
 import json
 import os
-import random
 import time
 from datetime import datetime, timezone
 
 import boto3
 from botocore.exceptions import ClientError
 
-from cdp.nba_scan import profile_message
-
-MAX_NEXT_DELAY_SECONDS = 60
 _resource = None
 _sqs = None
 
@@ -30,8 +26,10 @@ def _apply(resource, table_name, feedback, profile_key, ledger_key):
     values = {":opens": int(outcome["opened"]), ":clicks": int(outcome["clicked"])}
     sets = []
     if outcome["registered"]:
-        sets.append("s_registered = :yes")
+        # The welcome message goes out in the next daily run.
+        sets.extend(["s_registered = :yes", "s_next_due = :due"])
         values[":yes"] = True
+        values[":due"] = int(feedback.get("delivery_day") or 0) + 1
     names = {}
     if outcome["unsubscribed"]:
         # Opting out removes that channel's consent, which later decisions enforce.
@@ -89,6 +87,8 @@ def training_record(feedback):
         "image_id": feedback.get("image_id"),
         "image_theme": feedback.get("image_theme"),
         "content_selection": feedback.get("content_selection"),
+        "send_day": feedback.get("send_day"),
+        "delivery_day": feedback.get("delivery_day"),
         "feedback_at": datetime.now(timezone.utc).isoformat(),
         **feedback["outcome"],
     }
@@ -134,12 +134,6 @@ def _process(feedback, resource, sqs):
     sqs.send_message(
         QueueUrl=os.environ["ARCHIVE_QUEUE_URL"],
         MessageBody=json.dumps({"dataset": f"feedback_{feedback['channel']}", "row": training_record(feedback)}),
-    )
-    profile = resource.Table(table_name).get_item(Key=profile_key, ConsistentRead=True)["Item"]
-    sqs.send_message(
-        QueueUrl=os.environ["DECISION_QUEUE_URL"],
-        MessageBody=json.dumps(profile_message(profile, "feedback")),
-        DelaySeconds=random.randint(0, MAX_NEXT_DELAY_SECONDS),
     )
 
 

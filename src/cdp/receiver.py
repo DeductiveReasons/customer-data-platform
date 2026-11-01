@@ -18,11 +18,12 @@ REQUIRED_RECIPIENT = {
     "email": ("email",),
     "direct_mail": ("name", "address", "city", "state", "postal_code"),
 }
-RETENTION_DAYS = 7
+RETENTION_DAYS = 30
 MAX_FEEDBACK_DELAY_SECONDS = 30
 _table = None
 _token = None
 _sqs = None
+_profiles = None
 
 
 def _get_table():
@@ -90,6 +91,8 @@ def _send_feedback(message, outcome):
         "image_id",
         "image_theme",
         "content_selection",
+        "send_day",
+        "delivery_day",
     )
     feedback = {field: message.get(field) for field in fields}
     _get_sqs().send_message(
@@ -97,6 +100,41 @@ def _send_feedback(message, outcome):
         MessageBody=json.dumps({**feedback, "outcome": outcome}),
         DelaySeconds=random.randint(1, MAX_FEEDBACK_DELAY_SECONDS),
     )
+
+
+def _hold_until_delivery(message, outcome):
+    """Direct mail takes days to arrive, so its outcome stays hidden until the delivery day."""
+    fields = (
+        "message_id",
+        "customer_id",
+        "touch",
+        "channel",
+        "asset_id",
+        "features",
+        "model_version",
+        "selection",
+        "image_id",
+        "image_theme",
+        "content_selection",
+        "send_day",
+        "delivery_day",
+    )
+    feedback = {field: message.get(field) for field in fields}
+    feedback["outcome"] = outcome
+    _get_profiles().put_item(
+        Item={
+            "pk": f"MAILDUE#{int(message.get('delivery_day') or 0)}",
+            "sk": message["message_id"],
+            "feedback": json.dumps(feedback),
+        }
+    )
+
+
+def _get_profiles():
+    global _profiles
+    if _profiles is None:
+        _profiles = boto3.resource("dynamodb").Table(os.environ["PROFILES_TABLE"])
+    return _profiles
 
 
 def _receive(event, channel):
@@ -123,7 +161,10 @@ def _receive(event, channel):
     # message_id is the key, so a retried request overwrites its earlier copy.
     _get_table().put_item(Item={**stored, "expires_at": int(time.time()) + RETENTION_DAYS * 86400})
     if outcome is not None:
-        _send_feedback(message, outcome)
+        if channel == "direct_mail":
+            _hold_until_delivery(message, outcome)
+        else:
+            _send_feedback(message, outcome)
     return _response(202, {"status": "accepted", "message_id": message["message_id"], "sent": False})
 
 

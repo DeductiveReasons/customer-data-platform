@@ -31,18 +31,25 @@ def _send(sqs, queue_url, messages):
         entries = [e for e in entries if e["Id"] in failed_ids]
 
 
-def handler(_event, _context):
+def handler(event, _context):
     table = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
     sqs = boto3.client("sqs")
-    queue_url = os.environ["DECISION_QUEUE_URL"]
+    scanned = queue_due(table, sqs, os.environ["DECISION_QUEUE_URL"], int((event or {}).get("day", 0)))
+    return {"queued": scanned}
 
+
+def queue_due(table, sqs, queue_url, day):
+    """Queue everyone whose next decision is due on this simulated day."""
     scanned = 0
     pending = []
-    kwargs = {"FilterExpression": Attr("sk").eq("PROFILE")}
+    kwargs = {
+        "FilterExpression": Attr("sk").eq("PROFILE")
+        & (Attr("s_next_due").not_exists() | Attr("s_next_due").lte(day))
+    }
     while True:
         page = table.scan(**kwargs)
         for item in page["Items"]:
-            pending.append(profile_message(item, "scan"))
+            pending.append({**profile_message(item, "scan"), "day": day})
             scanned += 1
             if len(pending) == SEND_BATCH:
                 _send(sqs, queue_url, pending)
@@ -52,5 +59,5 @@ def handler(_event, _context):
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
     if pending:
         _send(sqs, queue_url, pending)
-    print(f"queued {scanned} profiles")
-    return {"queued": scanned}
+    print(f"queued {scanned} profiles for day {day}")
+    return scanned

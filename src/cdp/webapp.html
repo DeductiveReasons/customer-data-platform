@@ -38,6 +38,13 @@ tr.link{cursor:pointer}tr.link:hover{background:var(--accent-soft)}
 .profile{display:flex;flex-wrap:wrap;gap:16px;align-items:center}.avatar{width:84px;height:84px;border-radius:50%;display:grid;place-items:center;color:#fff;font-size:30px;font-weight:700;flex:none}.who{flex:1;min-width:210px}.who h1{margin:0}.who p{margin:2px 0}.nextimg{margin:0;width:190px;max-width:100%}.nextimg img{width:100%;aspect-ratio:2/1;object-fit:cover;border-radius:6px;display:block}.nextimg figcaption{font-size:12px;color:var(--muted)}.details{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px 18px;margin:0}.details dt{color:var(--muted);font-size:13px}.details dd{margin:0}.msg{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;padding:11px 0;border-top:1px solid var(--line);font-size:14px}.msgbody{flex:1;min-width:230px}.msgframe{width:100%;height:430px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}.vcard{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:0 0 12px;overflow:hidden}.vcard>img{display:block;width:100%;aspect-ratio:2/1;object-fit:cover}.vcard .vb{padding:10px 12px 0;font-size:14px}.vcard .vb b{display:block}.vactions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.approved{background:#d9f2e3;color:#116b3a;border-radius:5px;padding:1px 7px;font-size:12px;font-weight:600}.pending{background:#fbeccb;color:#8a5200;border-radius:5px;padding:1px 7px;font-size:12px;font-weight:600}.vframe{width:100%;height:560px;border:1px solid var(--line);border-radius:6px;background:#fff;margin-top:8px}.pager{display:flex;gap:10px;align-items:center;margin-top:14px}
 .path{list-style:none;display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;white-space:normal}.path li{background:var(--accent-soft);border-radius:6px;padding:3px 9px;font-size:13px;position:relative}.path li b{display:block;font-weight:600}.path li span{color:var(--muted);font-size:12px}
+.viz{--series-1:#2a78d6;--series-2:#eb6834;--series-3:#1baf7a;--series-4:#eda100;--series-5:#e87ba4;--grid:#e1e0d9;--axis:#c3c2b7;--tick:#6d6c67;--surface:var(--panel)}
+@media (prefers-color-scheme:dark){.viz{--series-1:#3987e5;--series-2:#d95926;--series-3:#199e70;--series-4:#c98500;--series-5:#d55181;--grid:#2c2c2a;--axis:#383835;--tick:#a3a29a}}
+.hero{font-size:52px;font-weight:650;line-height:1.05}.viz svg{display:block;width:100%;height:auto;overflow:visible}.viz text{font:12px system-ui,-apple-system,"Segoe UI",sans-serif;fill:var(--tick);font-variant-numeric:tabular-nums}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:13px;color:var(--muted);margin:0 0 8px}.legend span{display:inline-flex;align-items:center;gap:6px}.key{display:inline-block;width:14px;height:2px;border-radius:1px}.key.box{height:10px;width:10px;border-radius:2px}
+.chart-wrap{position:relative}.tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:7px 10px;font-size:13px;box-shadow:0 3px 10px rgba(0,0,0,.14);min-width:130px;z-index:3}.tip div{display:flex;align-items:center;gap:7px}.tip b{font-weight:650}.tip .t{color:var(--muted);margin-bottom:3px}
+.hit{fill:transparent;outline:none}.hit:focus-visible{fill:var(--accent-soft)}.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px}.grid2 .panel{margin:0 0 18px;min-width:0}
+details.tbl{margin-top:10px;font-size:14px}details.tbl summary{cursor:pointer;color:var(--muted)}
 .asset iframe{width:100%;height:340px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .asset h2{margin-bottom:2px}
 .tag{display:inline-block;background:var(--accent-soft);border-radius:5px;padding:0 7px;font-size:12px}
@@ -72,7 +79,7 @@ a{color:var(--accent)}
   <main id="view" tabindex="-1"></main>
 </div>
 <script>
-const VIEWS={overview:'Overview',performance:'Performance',variations:'Digital assets',journeys:'Journeys',model:'Model',content:'Image library',people:'People',monitoring:'Monitoring',usage:'Usage and costs'};
+const VIEWS={overview:'Overview',daily:'Daily dashboard',performance:'Performance',variations:'Digital assets',journeys:'Journeys',bandit:'Bandit tests',insights:'Tests and insights',model:'Model',content:'Image library',people:'People',monitoring:'Monitoring',usage:'Usage and costs'};
 const STATUSES={active:'Active journey',onboarding_due:'Onboarding due',registered:'Registered',journey_complete:'Journey complete',no_marketing_consent:'No marketing consent',no_contact_option:'No contact option'};
 const LABELS={email:'Email',direct_mail:'Direct mail',no_contact:'No contact'};
 const when=v=>{if(!v)return '–';const d=new Date(v);return isNaN(d)?v:d.toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})};
@@ -107,7 +114,61 @@ const funnelCols=[
  {t:'Registered',n:1,f:r=>num(r.registered)},
  {t:'Sign-up rate',n:1,f:r=>pct(r.registered,r.delivered)},
  {t:'Unsubscribed',n:1,f:r=>num(r.unsubscribed)}];
+const niceMax=v=>{if(v<=0)return 1;const p=Math.pow(10,Math.floor(Math.log10(v))),n=v/p;return (n<=1?1:n<=2?2:n<=5?5:10)*p};
+const shortNum=v=>Math.abs(v)>=1e6?(v/1e6).toFixed(1).replace(/\.0$/,'')+'M':Math.abs(v)>=1000?(v/1000).toFixed(1).replace(/\.0$/,'')+'K':String(Math.round(v*100)/100);
+const shortDate=s=>{const d=new Date(s+'T12:00:00');return isNaN(d)?s:d.toLocaleDateString([], {month:'short',day:'numeric'})};
+const chartStore=[];
+function legend(series,box){return series.length<2?'':`<div class="legend">${series.map(s=>`<span><i class="key ${box?'box':''}" style="background:${s.color}"></i>${esc(s.name)}</span>`).join('')}</div>`}
+function xTicks(n,w){const want=Math.max(2,Math.min(n,Math.floor(w/70)));const step=Math.max(1,Math.ceil((n-1)/(want-1)));const a=[];for(let i=0;i<n;i+=step)a.push(i);return a}
+// Line and column charts share one frame, with a hover and keyboard readout for each date.
+function chart({title,labels,series,kind,fmt,tickFmt,empty}){
+  const id='c'+chartStore.length,W=640,H=250,L=48,R=14,T=12,B=28,pw=W-L-R,ph=H-T-B,n=labels.length;
+  if(!n)return `<p class="muted">${esc(empty||'No data yet.')}</p>`;
+  const top=niceMax(Math.max(0,...series.flatMap(s=>s.values.map(v=>v||0)))),y=v=>T+ph-(v/top)*ph,step=pw/n;
+  const x=i=>kind==='bars'?L+step*(i+.5):(n===1?L+pw/2:L+pw*i/(n-1));
+  let s=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)}">`;
+  for(let g=0;g<=4;g++){const v=top*g/4,yy=y(v);s+=`<line x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}" stroke="${g?'var(--grid)':'var(--axis)'}"/><text x="${L-8}" y="${yy+4}" text-anchor="end">${esc((tickFmt||shortNum)(v))}</text>`}
+  xTicks(n,pw).forEach(i=>{s+=`<text x="${x(i)}" y="${H-8}" text-anchor="middle">${esc(shortDate(labels[i]))}</text>`});
+  if(kind==='bars'){const count=series.length,bw=Math.max(2,Math.min(14,(step-6-2*(count-1))/count));
+    labels.forEach((_,i)=>series.forEach((sr,k)=>{const v=sr.values[i]||0;if(!v)return;const h=Math.max(1,y(0)-y(v)),bx=x(i)-(count*bw+2*(count-1))/2+k*(bw+2),r=Math.min(3,bw/2,h),yy=y(v);
+      s+=`<path d="M${bx} ${y(0)}V${yy+r}Q${bx} ${yy} ${bx+r} ${yy}H${bx+bw-r}Q${bx+bw} ${yy} ${bx+bw} ${yy+r}V${y(0)}Z" fill="${sr.color}"/>`}));
+  }else{series.forEach(sr=>{const pts=sr.values.map((v,i)=>v==null?null:[x(i),y(v)]).filter(Boolean);if(pts.length>1)s+=`<path d="M${pts.map(p=>p.join(' ')).join('L')}" fill="none" stroke="${sr.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;const e=pts[pts.length-1];if(e)s+=`<circle cx="${e[0]}" cy="${e[1]}" r="4" fill="${sr.color}" stroke="var(--panel)" stroke-width="2"/>`})}
+  s+=`<line class="cross" x1="0" x2="0" y1="${T}" y2="${T+ph}" stroke="var(--axis)" visibility="hidden"/>`;
+  const hw=kind==='bars'?step:(n===1?pw:pw/(n-1));
+  labels.forEach((_,i)=>{s+=`<rect class="hit" data-i="${i}" tabindex="0" aria-label="${esc(shortDate(labels[i])+': '+series.map(sr=>sr.name+' '+fmt(sr.values[i])).join(', '))}" x="${Math.max(L,x(i)-hw/2)}" y="${T}" width="${Math.max(hw,1)}" height="${ph}"/>`});
+  s+='</svg>';
+  chartStore.push({id,labels,series,fmt,x,W,kind});
+  const rows=labels.map((l,i)=>`<tr><td>${esc(shortDate(l))}</td>${series.map(sr=>`<td class="n">${esc(fmt(sr.values[i]))}</td>`).join('')}</tr>`).join('');
+  return `${legend(series,kind==='bars')}<div class="chart-wrap" id="${id}">${s}<div class="tip" hidden></div></div><details class="tbl"><summary>View as a table</summary><div class="scroll"><table><thead><tr><th scope="col">Date</th>${series.map(sr=>`<th class="n" scope="col">${esc(sr.name)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div></details>`;
+}
+function bindCharts(){chartStore.splice(0).forEach(c=>{const box=document.getElementById(c.id);if(!box)return;const tip=box.querySelector('.tip'),cross=box.querySelector('.cross');
+  const showAt=i=>{tip.replaceChildren();const t=document.createElement('div');t.className='t';t.textContent=shortDate(c.labels[i]);tip.append(t);
+    c.series.forEach(sr=>{const r=document.createElement('div'),k=document.createElement('i'),b=document.createElement('b'),n=document.createElement('span');k.className='key';k.style.background=sr.color;b.textContent=c.fmt(sr.values[i]);n.textContent=sr.name;r.append(k,b,n);tip.append(r)});
+    const px=c.x(i);if(c.kind!=='bars'){cross.setAttribute('x1',px);cross.setAttribute('x2',px);cross.setAttribute('visibility','visible')}tip.hidden=false;
+    const bw=box.clientWidth,left=px/c.W*bw,tw=tip.offsetWidth;tip.style.left=Math.max(0,left+12+tw>bw?left-tw-12:left+12)+'px';tip.style.top='8px'};
+  const hide=()=>{tip.hidden=true;cross.setAttribute('visibility','hidden')};
+  box.querySelectorAll('.hit').forEach(h=>{const i=Number(h.dataset.i);h.addEventListener('pointermove',()=>showAt(i));h.addEventListener('focus',()=>showAt(i));h.addEventListener('blur',hide)});box.addEventListener('pointerleave',hide)})}
 const render={
+ async daily(){
+  const d=await api('/api/daily'),S=d.snapshots,now=S[S.length-1];
+  if(!now)return `<h1>Daily dashboard</h1><div class="panel"><p class="muted">No daily results yet. They appear after the first daily run.</p></div>`;
+  chartStore.length=0;
+  const c1='var(--series-1)',c2='var(--series-2)',c3='var(--series-3)',pctFmt=v=>v==null?'–':(100*v).toFixed(1)+'%',numFmt=v=>v==null?'0':num(v),F=now.forecast;
+  const days=[...new Set(d.actual_sends.map(r=>Number(r.day)))].sort((a,b)=>a-b),dateOf=n=>{const s=new Date(S[0].date+'T12:00:00');s.setDate(s.getDate()+(n-S[0].day));return s.getFullYear()+'-'+String(s.getMonth()+1).padStart(2,'0')+'-'+String(s.getDate()).padStart(2,'0')};
+  const sent=ch=>days.map(n=>{const r=d.actual_sends.find(x=>Number(x.day)===n&&x.channel===ch);return r?Number(r.sends):0});
+  const rateChart=chart({title:'Registration rate by day',labels:S.map(x=>x.date),series:[{name:'All leads',color:c1,values:S.map(x=>x.registration_rate)},{name:'Contacted leads',color:c2,values:S.map(x=>x.registration_rate_contacted)}],kind:'line',fmt:pctFmt,tickFmt:v=>(100*v).toFixed(0)+'%'});
+  const nbaChart=chart({title:'People by next best action, by day',labels:S.map(x=>x.date),series:[{name:'Email',color:c1,values:S.map(x=>x.nba_email)},{name:'Direct mail',color:c2,values:S.map(x=>x.nba_direct_mail)},{name:'No contact',color:c3,values:S.map(x=>x.nba_no_contact)}],kind:'line',fmt:numFmt});
+  const forecastChart=chart({title:`Send forecast for the next ${F.length} days`,labels:F.map(x=>x.date),series:[{name:'Email sends',color:c1,values:F.map(x=>x.email_sends)},{name:'Direct mail sends',color:c2,values:F.map(x=>x.direct_mail_sends)},{name:'Direct mail deliveries',color:c3,values:F.map(x=>x.direct_mail_deliveries)}],kind:'bars',fmt:numFmt});
+  const sentChart=chart({title:'Actual sends by day',labels:days.map(dateOf),series:[{name:'Email',color:c1,values:sent('email')},{name:'Direct mail',color:c2,values:sent('direct_mail')}],kind:'bars',fmt:numFmt,empty:'No sends yet.'});
+  view._after=bindCharts;
+  const sum=k=>F.reduce((a,x)=>a+x[k],0);
+  return `<div class="viz"><h1>Daily dashboard</h1><p class="sub">Simulated campaign, day ${num(now.day<0?0:now.day)} (${esc(shortDate(now.date))}). The model runs once a day, and direct mail arrives after ${d.lead_days} days. Results are simulated.</p>
+  <div class="panel"><div class="muted">Registration rate, all leads</div><div class="hero">${pctFmt(now.registration_rate)}</div><div class="muted">${num(now.registered)} of ${num(now.people)} leads registered · ${pctFmt(now.registration_rate_contacted)} of leads contacted</div></div>
+  <div class="tiles"><div class="tile"><b>${num(now.nba_email)}</b><span>Next best action: email</span></div><div class="tile"><b>${num(now.nba_direct_mail)}</b><span>Next best action: direct mail</span></div><div class="tile"><b>${num(now.nba_no_contact)}</b><span>Next best action: no contact</span></div><div class="tile"><b>${num(now.mail_in_transit)}</b><span>Direct mail in transit</span></div></div>
+  <div class="panel"><h2>Send forecast, next ${F.length} days</h2><p class="muted">Based on each person's next best action today: ${num(sum('email_sends'))} emails, ${num(sum('direct_mail_sends'))} mail pieces and ${num(sum('direct_mail_deliveries'))} deliveries. It covers each person's next message only, so later days will rise as people get follow-ups.</p>${forecastChart}</div>
+  <div class="grid2"><div class="panel"><h2>Registration rate by day</h2>${rateChart}</div><div class="panel"><h2>People by next best action</h2>${nbaChart}</div></div>
+  <div class="panel"><h2>Actual sends by day</h2>${sentChart}</div></div>`;
+ },
  async overview(){
   const d=await api('/api/overview'),t=d.totals||{},f=funnelTotals(d.funnel),max=Math.max(1,...d.statuses.map(s=>Number(s.people)));
   return `<h1>Overview</h1><p class="sub">People snapshot: ${esc(t.snapshot_at||'not exported yet')} · Model: ${esc(t.model_version||'–')}</p>
@@ -148,6 +209,53 @@ const render={
   <h2 style="margin-top:16px">What the bandit has learned</h2>${table([{t:'Image theme',k:'label'},{t:'Messages',n:1,f:r=>num(r.messages)},{t:'Clicks',n:1,f:r=>num(r.clicks)},{t:'Click rate',n:1,f:r=>pct(r.clicks,r.messages)}],m.bandit_arms||[],{empty:'The bandit has not updated yet.'})}</div>
   <div class="panel"><h2>What drives predictions</h2>${m.importance.map(i=>`<div class="bar"><span>${esc(i.feature.replace(/_/g,' '))}</span><i style="width:${(100*i.share/maxI).toFixed(1)}%"></i><em>${(100*i.share).toFixed(1)}%</em></div>`).join('')}</div>
   <div class="panel"><h2>Calibration on test people</h2><p class="muted">Predicted and actual registration rates should be close in each band.</p>${table([{t:'Band',f:r=>m.calibration.indexOf(r)+1},{t:'Predicted',n:1,f:r=>(100*r.predicted).toFixed(1)+'%'},{t:'Actual',n:1,f:r=>(100*r.actual).toFixed(1)+'%'},{t:'Records',n:1,f:r=>num(r.rows)}],m.calibration)}</div>`;
+ },
+ async bandit(){
+  const d=await api('/api/bandit'),C=d.comparison,R=d.registration_comparison;
+  chartStore.length=0;
+  const find=(t,n)=>t.rows.find(r=>r.name===n)||{messages:0,clicked:0,registered:0,rate:0};
+  const b=find(C,'bandit'),h=find(C,'holdout'),rb=find(R,'bandit'),rh=find(R,'holdout');
+  if(!b.messages)return `<h1>Bandit tests</h1><div class="panel"><p class="muted">No bandit results yet. They appear as the campaign's messages are delivered.</p></div>`;
+  const lift=h.rate?b.rate/h.rate-1:null,c=['var(--series-1)','var(--series-2)','var(--series-3)','var(--series-4)','var(--series-5)'];
+  const pctFmt=v=>v==null?'–':(100*v).toFixed(1)+'%',dateOf=n=>{const s=new Date(d.start_date+'T12:00:00');s.setDate(s.getDate()+Number(n));return s.getFullYear()+'-'+String(s.getMonth()+1).padStart(2,'0')+'-'+String(s.getDate()).padStart(2,'0')};
+  const days=[...new Set(d.by_day.map(r=>Number(r.day)))].sort((x,y)=>x-y);
+  // Daily holdout groups can be tiny, so each line is the running total to date.
+  const running=sel=>{let m=0,k=0;return days.map(n=>{const r=d.by_day.find(x=>Number(x.day)===n&&x.selection===sel);if(r){m+=Number(r.messages);k+=Number(r.clicked)}return m?k/m:null})};
+  const rateChart=chart({title:'Click rate to date, bandit and random holdout',labels:days.map(dateOf),series:[{name:'Bandit',color:c[0],values:running('bandit')},{name:'Random holdout',color:c[1],values:running('holdout')}],kind:'line',fmt:pctFmt,tickFmt:v=>(100*v).toFixed(0)+'%'});
+  const themeDays=[...new Set(d.theme_days.map(r=>Number(r.day)))].sort((x,y)=>x-y);
+  const totals={};d.theme_days.forEach(r=>totals[r.theme]=(totals[r.theme]||0)+Number(r.messages));
+  const top=Object.keys(totals).sort((x,y)=>totals[y]-totals[x]).slice(0,4);
+  const dayTotal=n=>d.theme_days.filter(r=>Number(r.day)===n).reduce((a,r)=>a+Number(r.messages),0);
+  const share=t=>themeDays.map(n=>{const all=dayTotal(n);const r=d.theme_days.find(x=>Number(x.day)===n&&x.theme===t);return all?(r?Number(r.messages):0)/all:null});
+  const other=themeDays.map(n=>{const all=dayTotal(n);if(!all)return null;return d.theme_days.filter(r=>Number(r.day)===n&&!top.includes(r.theme)).reduce((a,r)=>a+Number(r.messages),0)/all});
+  const shareChart=chart({title:'Share of bandit messages by image theme',labels:themeDays.map(dateOf),series:[...top.map((t,i)=>({name:d.theme_labels[t]||t,color:c[i],values:share(t)})),{name:'All other themes',color:c[4],values:other}],kind:'line',fmt:pctFmt,tickFmt:v=>(100*v).toFixed(0)+'%'});
+  view._after=bindCharts;
+  const bm=d.themes.reduce((a,t)=>a+t.bandit_messages,0);
+  const verdict=C.winner==='bandit'&&C.verdict==='clear winner'?'The bandit is clearly beating random image choice.':C.winner==='bandit'&&C.verdict==='likely winner'?'The bandit is probably beating random image choice.':C.winner==='holdout'&&C.verdict!=='no clear winner'?'Random image choice is ahead of the bandit.':'There is no clear difference from random image choice yet.';
+  return `<div class="viz"><h1>Bandit tests</h1><p class="sub">Contextual Thompson sampling chooses the image theme, and a random 10% holdout provides the comparison. Version ${esc(d.version||'–')}. Results are simulated.</p>
+  <div class="panel"><div class="muted">Click-rate lift over the random holdout</div><div class="hero">${lift==null?'–':(lift>=0?'+':'')+(100*lift).toFixed(1)+'%'}</div><div>${esc(verdict)}${C.p_value!=null?` <span class="muted">p ${C.p_value<0.001?'&lt; 0.001':'= '+C.p_value.toFixed(3)}</span>`:''}</div></div>
+  <div class="tiles"><div class="tile"><b>${pctFmt(b.rate)}</b><span>Bandit click rate</span></div><div class="tile"><b>${pctFmt(h.rate)}</b><span>Holdout click rate</span></div><div class="tile"><b>${pctFmt(rb.rate)}</b><span>Bandit registrations per message</span></div><div class="tile"><b>${pctFmt(rh.rate)}</b><span>Holdout registrations per message</span></div><div class="tile"><b>${num(b.messages)} / ${num(h.messages)}</b><span>Messages, bandit / holdout</span></div></div>
+  <div class="grid2"><div class="panel"><h2>Click rate to date</h2>${rateChart}</div><div class="panel"><h2>Where the bandit sends traffic</h2>${shareChart}</div></div>
+  <div class="panel"><h2>Results by image theme</h2><p class="muted">Holdout rates are the fair comparison between themes. The bandit's rates are higher partly because it shows each theme to the people it suits.</p>${table([{t:'Image theme',k:'label'},{t:'Bandit messages',n:1,f:t=>num(t.bandit_messages)},{t:'Share of traffic',n:1,f:t=>pct(t.bandit_messages,bm)},{t:'Bandit click rate',n:1,f:t=>pct(t.bandit_clicked,t.bandit_messages)},{t:'Holdout messages',n:1,f:t=>num(t.holdout_messages)},{t:'Holdout click rate',n:1,f:t=>pct(t.holdout_clicked,t.holdout_messages)}],d.themes)}</div></div>`;
+ },
+ async insights(){
+  const d=await api('/api/insights');
+  const names=n=>{const x=String(n??'–');return assetNames[x]||x.replace(/_/g,' ').replace(/^./,c=>c.toUpperCase())};
+  const verdictCls=v=>v==='clear winner'?'approved':v==='likely winner'?'pending':'tag';
+  const metricName=m=>m==='registered'?'Registration rate':'Click rate';
+  const test=(title,why,t)=>`<section class="panel"><h2>${esc(title)}</h2><p class="muted">${esc(why)}</p>
+   <p><b>${t.winner?esc(names(t.winner)):'No result yet'}</b> <span class="${verdictCls(t.verdict)}">${esc(t.verdict)}</span>${t.lift_over_runner_up!=null&&t.runner_up?` <span class="muted">${(100*t.lift_over_runner_up).toFixed(1)}% above ${esc(names(t.runner_up))}${t.p_value!=null?`, p = ${t.p_value<0.001?'&lt;0.001':t.p_value.toFixed(3)}`:''}</span>`:''}</p>
+   ${table([{t:'Option',f:r=>names(r.name)},{t:'Messages',n:1,f:r=>num(r.messages)},{t:'Clicks',n:1,f:r=>num(r.clicked)},{t:'Registered',n:1,f:r=>num(r.registered)},{t:metricName(t.metric),n:1,f:r=>(100*r.rate).toFixed(2)+'%'}],t.rows)}</section>`;
+  const segs=(title,why,list)=>`<section class="panel"><h2>${esc(title)}</h2><p class="muted">${esc(why)}</p>${table([{t:'Segment',f:r=>names(r.segment)},{t:'Winner',f:r=>r.winner?names(r.winner):'–'},{t:'Result',h:r=>`<span class="${verdictCls(r.verdict)}">${esc(r.verdict)}</span>`},{t:'Rate',n:1,f:r=>r.rows[0]?(100*r.rows[0].rate).toFixed(1)+'%':'–'},{t:'Next best',f:r=>r.runner_up?names(r.runner_up):'–'}],list)}</section>`;
+  return `<h1>Tests and insights</h1><p class="sub">Winners use randomized messages only, because the model's own picks favor people already likely to register. Options need ${num(d.min_messages)} messages to win. Results are simulated.</p>
+  ${test('Content bandit vs random holdout','Did personalized image choice beat a random image?',d.bandit)}
+  ${test('Offer test','Which offer gets the most registrations when chosen at random?',d.offers)}
+  ${test('Channel test','Email and direct mail, compared on registrations. Costs are not included.',d.channels)}
+  ${test('Image theme test','Which theme gets the most clicks when chosen at random?',d.themes)}
+  ${test('Top images','The 15 highest click rates among randomly chosen themes. Image counts are small and many are compared, so treat these as leads to test.',d.images)}
+  ${segs('Best offer by employer subsidy','Does the best offer depend on whether the employer pays for fitness?',d.subsidy_offers)}
+  ${segs('Best image theme by activity','Does the best theme depend on how active someone is in the app?',d.activity)}
+  ${segs('Best image theme by industry','Small groups and many comparisons, so these need follow-up tests.',d.industries)}`;
  },
  async journeys(params={}){
   const d=await api('/api/journeys'),len=Number(params.len)||1;

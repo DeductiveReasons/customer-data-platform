@@ -6,11 +6,9 @@ Previous results are moved under previous-runs/ in S3.
 Usage: python scripts/load_population.py <profiles_table> <bucket> <run_name> [people] [--replace]
 """
 import concurrent.futures
-import json
 import os
 import re
 import sys
-from decimal import Decimal
 
 import boto3
 
@@ -18,26 +16,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
-from cdp import identity  # noqa: E402
 from reset_campaign import archive_results  # noqa: E402
-from sample_data import generate, traits_of  # noqa: E402
+from cdp.daily import CLOCK_KEY  # noqa: E402
+from sample_data import LEADS_RECEIVED, generate, lead_items  # noqa: E402
 
 CHUNK = 5000
+LEAD_SEED = 2026  # Not used to train or evaluate the model, so these are all new leads.
 WORKERS = 12
-
-
-def items_for(entry):
-    person = entry["person"]
-    customer_id = person["user_id"]
-    profile = {"pk": f"CUSTOMER#{customer_id}", "sk": "PROFILE", "updated_at": "bulk-load"}
-    traits = json.loads(json.dumps(traits_of(entry)), parse_float=Decimal)
-    profile.update({f"t_{name}": value for name, value in traits.items()})
-    profile.update({f"c_{name}": value for name, value in entry["consent"].items()})
-    links = [
-        {"pk": f"ID#{identifier}", "sk": "LINK", "customer_id": customer_id}
-        for identifier in identity.identifiers({"user_id": customer_id, "email": person["email"]})
-    ]
-    return [profile] + links
 
 
 def _write(table_name, items):
@@ -77,12 +62,16 @@ def main():
         print(f"removed {removed} existing records", flush=True)
 
     items = []
-    for entry in generate(count, seed=42):
-        items.extend(items_for(entry))
+    for entry in generate(count, seed=LEAD_SEED):
+        items.extend(lead_items(entry))
     chunks = [items[start : start + CHUNK] for start in range(0, len(items), CHUNK)]
     with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
         written = sum(pool.map(lambda chunk: _write(table_name, chunk), chunks))
-    print(f"wrote {written} records for {count} people", flush=True)
+    # Day -1 means the leads have arrived and the first daily run has not started.
+    boto3.resource("dynamodb").Table(table_name).put_item(
+        Item={**CLOCK_KEY, "day": -1, "start_date": LEADS_RECEIVED}
+    )
+    print(f"wrote {written} records for {count} new leads", flush=True)
 
 
 if __name__ == "__main__":

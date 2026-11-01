@@ -2,6 +2,7 @@
 import base64
 import hmac
 import json
+import math
 import os
 import re
 import time
@@ -9,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 
-from cdp import approvals, assets, content, nba
+from cdp import approvals, assets, content, daily, nba
 
 with open(os.path.join(os.path.dirname(__file__), "webapp.html"), encoding="utf-8") as page_file:
     PAGE = page_file.read()
@@ -134,6 +135,88 @@ FROM (SELECT * FROM email_engagement UNION ALL SELECT * FROM direct_mail_engagem
 WHERE content_selection IS NOT NULL
 GROUP BY content_selection
 """
+DAILY_SENDS_SQL = """
+SELECT send_day AS day, channel, COUNT(DISTINCT message_id) AS sends
+FROM nba_history
+WHERE send_day IS NOT NULL
+GROUP BY send_day, channel
+ORDER BY send_day, channel
+"""
+ENGAGEMENT_SQL = "(SELECT * FROM email_engagement UNION ALL SELECT * FROM direct_mail_engagement)"
+# Winners use only randomized rows. The model's own choices favor people likely to register anyway.
+INSIGHT_QUERIES = {
+    "offers": f"""
+SELECT asset_id AS name, COUNT(DISTINCT message_id) AS messages,
+       COUNT(DISTINCT CASE WHEN clicked THEN message_id END) AS clicked,
+       COUNT(DISTINCT CASE WHEN registered THEN message_id END) AS registered
+FROM {ENGAGEMENT_SQL} WHERE selection = 'explore' GROUP BY asset_id""",
+    "channels": f"""
+SELECT channel AS name, COUNT(DISTINCT message_id) AS messages,
+       COUNT(DISTINCT CASE WHEN clicked THEN message_id END) AS clicked,
+       COUNT(DISTINCT CASE WHEN registered THEN message_id END) AS registered
+FROM {ENGAGEMENT_SQL} WHERE selection = 'explore' GROUP BY channel""",
+    "themes": f"""
+SELECT image_theme AS name, COUNT(DISTINCT message_id) AS messages,
+       COUNT(DISTINCT CASE WHEN clicked THEN message_id END) AS clicked,
+       COUNT(DISTINCT CASE WHEN registered THEN message_id END) AS registered
+FROM {ENGAGEMENT_SQL} WHERE content_selection = 'holdout' GROUP BY image_theme""",
+    "bandit": f"""
+SELECT content_selection AS name, COUNT(DISTINCT message_id) AS messages,
+       COUNT(DISTINCT CASE WHEN clicked THEN message_id END) AS clicked,
+       COUNT(DISTINCT CASE WHEN registered THEN message_id END) AS registered
+FROM {ENGAGEMENT_SQL} WHERE content_selection IN ('bandit', 'holdout') GROUP BY content_selection""",
+    "images": f"""
+SELECT image_id AS name, COUNT(DISTINCT message_id) AS messages,
+       COUNT(DISTINCT CASE WHEN clicked THEN message_id END) AS clicked,
+       COUNT(DISTINCT CASE WHEN registered THEN message_id END) AS registered
+FROM {ENGAGEMENT_SQL} WHERE content_selection = 'holdout' GROUP BY image_id""",
+    "subsidy_offers": f"""
+SELECT CONCAT(CASE WHEN p.employer_fitness_subsidy = 1 THEN 'Subsidy' ELSE 'No subsidy' END, '|', e.asset_id) AS name,
+       COUNT(DISTINCT e.message_id) AS messages,
+       COUNT(DISTINCT CASE WHEN e.clicked THEN e.message_id END) AS clicked,
+       COUNT(DISTINCT CASE WHEN e.registered THEN e.message_id END) AS registered
+FROM {ENGAGEMENT_SQL} e JOIN people p ON e.customer_id = p.customer_id
+WHERE e.selection = 'explore' GROUP BY 1""",
+    "industries": f"""
+SELECT CONCAT(p.employer_industry, '|', e.image_theme) AS name,
+       COUNT(DISTINCT e.message_id) AS messages,
+       COUNT(DISTINCT CASE WHEN e.clicked THEN e.message_id END) AS clicked,
+       COUNT(DISTINCT CASE WHEN e.registered THEN e.message_id END) AS registered
+FROM {ENGAGEMENT_SQL} e JOIN people p ON e.customer_id = p.customer_id
+WHERE e.content_selection = 'holdout' GROUP BY 1""",
+    "activity": f"""
+SELECT CONCAT(CASE WHEN p.app_sessions_30d >= 5 THEN 'Active app users' ELSE 'Less active users' END, '|', e.image_theme) AS name,
+       COUNT(DISTINCT e.message_id) AS messages,
+       COUNT(DISTINCT CASE WHEN e.clicked THEN e.message_id END) AS clicked,
+       COUNT(DISTINCT CASE WHEN e.registered THEN e.message_id END) AS registered
+FROM {ENGAGEMENT_SQL} e JOIN people p ON e.customer_id = p.customer_id
+WHERE e.content_selection = 'holdout' GROUP BY 1""",
+}
+TEST_MIN_MESSAGES = 200
+BANDIT_BY_DAY_SQL = f"""
+SELECT send_day AS day, content_selection AS selection,
+       COUNT(DISTINCT message_id) AS messages,
+       COUNT(DISTINCT CASE WHEN clicked THEN message_id END) AS clicked,
+       COUNT(DISTINCT CASE WHEN registered THEN message_id END) AS registered
+FROM {ENGAGEMENT_SQL}
+WHERE content_selection IN ('bandit', 'holdout') AND send_day IS NOT NULL
+GROUP BY send_day, content_selection ORDER BY send_day
+"""
+BANDIT_THEME_BY_DAY_SQL = f"""
+SELECT send_day AS day, image_theme AS theme, COUNT(DISTINCT message_id) AS messages
+FROM {ENGAGEMENT_SQL}
+WHERE content_selection = 'bandit' AND send_day IS NOT NULL
+GROUP BY send_day, image_theme ORDER BY send_day
+"""
+BANDIT_THEME_SQL = f"""
+SELECT image_theme AS theme, content_selection AS selection,
+       COUNT(DISTINCT message_id) AS messages,
+       COUNT(DISTINCT CASE WHEN clicked THEN message_id END) AS clicked,
+       COUNT(DISTINCT CASE WHEN registered THEN message_id END) AS registered
+FROM {ENGAGEMENT_SQL}
+WHERE content_selection IN ('bandit', 'holdout')
+GROUP BY image_theme, content_selection
+"""
 COST_CACHE_SECONDS = 3600  # Each Cost Explorer request costs about one cent.
 USAGE_DAYS = 30
 VARIATION_PAGE_SIZE = 12
@@ -257,6 +340,9 @@ def _endpoints():
         {"group": "Console", "method": "GET", "url": "/api/assets", "auth": "Password", "purpose": "Campaign asset names and previews"},
         {"group": "Console", "method": "GET", "url": "/api/variations", "auth": "Password", "purpose": "Browse every deliverable variation and its approval status"},
         {"group": "Console", "method": "POST", "url": "/api/variations/{id}/status", "auth": "Password", "purpose": "Approve a variation or set it to pending approval"},
+        {"group": "Console", "method": "GET", "url": "/api/bandit", "auth": "Password", "purpose": "Bandit test outcomes against the random holdout"},
+        {"group": "Console", "method": "GET", "url": "/api/insights", "auth": "Password", "purpose": "Test winners and segment insights"},
+        {"group": "Console", "method": "GET", "url": "/api/daily", "auth": "Password", "purpose": "Daily results and send forecast"},
         {"group": "Console", "method": "GET", "url": "/api/model", "auth": "Password", "purpose": "Next best action model results and top features"},
         {"group": "Console", "method": "GET", "url": "/api/journeys", "auth": "Password", "purpose": "Most successful message sequences"},
         {"group": "Console", "method": "GET", "url": "/api/content", "auth": "Password", "purpose": "Image library results"},
@@ -412,6 +498,125 @@ def _model_page():
         print(f"bandit comparison failed: {type(exc).__name__}")
         selections = []
     return {**MODEL_CARD, "bandit_version": current.get("version"), "bandit_arms": arms, "bandit_selections": selections}
+
+
+def _daily():
+    s3 = boto3.client("s3")
+    bucket = os.environ["IMAGE_BUCKET"]
+    snapshots = []
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="analytics/daily/"):
+        for item in page.get("Contents", []):
+            snapshots.append(json.loads(s3.get_object(Bucket=bucket, Key=item["Key"])["Body"].read()))
+    snapshots.sort(key=lambda snapshot: snapshot["day"])
+    return {
+        "snapshots": snapshots,
+        "actual_sends": run_query(DAILY_SENDS_SQL),
+        "lead_days": nba.DIRECT_MAIL_LEAD_DAYS,
+    }
+
+
+def compare(rows, metric):
+    """Rank a test and check whether the winner differs from the runner-up, using a two-proportion z-test."""
+    ranked = []
+    for row in rows:
+        messages = int(row.get("messages") or 0)
+        if messages:
+            ranked.append(
+                {
+                    "name": row["name"],
+                    "messages": messages,
+                    "clicked": int(row.get("clicked") or 0),
+                    "registered": int(row.get("registered") or 0),
+                    "rate": int(row.get(metric) or 0) / messages,
+                }
+            )
+    ranked.sort(key=lambda item: item["rate"], reverse=True)
+    eligible = [item for item in ranked if item["messages"] >= TEST_MIN_MESSAGES]
+    verdict = "not enough data"
+    p_value = None
+    lift = None
+    if len(eligible) >= 2:
+        first, second = eligible[0], eligible[1]
+        pooled = (first["rate"] * first["messages"] + second["rate"] * second["messages"]) / (
+            first["messages"] + second["messages"]
+        )
+        variance = pooled * (1 - pooled) * (1 / first["messages"] + 1 / second["messages"])
+        if variance > 0:
+            z = (first["rate"] - second["rate"]) / math.sqrt(variance)
+            p_value = round(math.erfc(z / math.sqrt(2)), 5)
+            verdict = "clear winner" if p_value < 0.01 else "likely winner" if p_value < 0.05 else "no clear winner"
+        if second["rate"]:
+            lift = round(first["rate"] / second["rate"] - 1, 4)
+    return {
+        "metric": metric,
+        "winner": eligible[0]["name"] if eligible else None,
+        "runner_up": eligible[1]["name"] if len(eligible) > 1 else None,
+        "lift_over_runner_up": lift,
+        "p_value": p_value,
+        "verdict": verdict,
+        "rows": ranked,
+    }
+
+
+def segment_winners(rows, metric):
+    """Split rows named 'segment|option' and find each segment's winner."""
+    segments = {}
+    for row in rows:
+        segment, _, option = (row.get("name") or "").partition("|")
+        if segment and option:
+            segments.setdefault(segment, []).append({**row, "name": option})
+    return [{"segment": segment, **compare(items, metric)} for segment, items in sorted(segments.items())]
+
+
+def _bandit_page():
+    selections = run_query(INSIGHT_QUERIES["bandit"])
+    by_day = run_query(BANDIT_BY_DAY_SQL)
+    theme_days = run_query(BANDIT_THEME_BY_DAY_SQL)
+    themes = run_query(BANDIT_THEME_SQL)
+    rows = {}
+    for row in themes:
+        theme = row["theme"]
+        entry = rows.setdefault(
+            theme,
+            {
+                "theme": theme,
+                "label": content.THEMES.get(theme, {}).get("label", theme),
+                "bandit_messages": 0,
+                "bandit_clicked": 0,
+                "holdout_messages": 0,
+                "holdout_clicked": 0,
+            },
+        )
+        entry[f"{row['selection']}_messages"] = int(row["messages"])
+        entry[f"{row['selection']}_clicked"] = int(row["clicked"])
+    current = _current_model().get("content") or {}
+    return {
+        "comparison": compare(selections, "clicked"),
+        "registration_comparison": compare(selections, "registered"),
+        "by_day": by_day,
+        "theme_days": theme_days,
+        "themes": sorted(rows.values(), key=lambda item: item["bandit_messages"], reverse=True),
+        "theme_labels": {theme: config["label"] for theme, config in content.THEMES.items()},
+        "version": current.get("version"),
+        "start_date": daily.DEFAULT_START,
+    }
+
+
+def _insights():
+    data = {name: run_query(sql) for name, sql in INSIGHT_QUERIES.items()}
+    images = compare(data["images"], "clicked")
+    images["rows"] = images["rows"][:15]
+    return {
+        "offers": compare(data["offers"], "registered"),
+        "channels": compare(data["channels"], "registered"),
+        "themes": compare(data["themes"], "clicked"),
+        "bandit": compare(data["bandit"], "clicked"),
+        "images": images,
+        "subsidy_offers": segment_winners(data["subsidy_offers"], "registered"),
+        "industries": segment_winners(data["industries"], "clicked"),
+        "activity": segment_winners(data["activity"], "clicked"),
+        "min_messages": TEST_MIN_MESSAGES,
+    }
 
 
 def _journeys():
@@ -740,6 +945,12 @@ def _route(path, query):
         return _cached("usage", _usage)
     if path == "/api/variations":
         return _variations(query)
+    if path == "/api/bandit":
+        return _cached("bandit", _bandit_page)
+    if path == "/api/insights":
+        return _cached("insights", _insights)
+    if path == "/api/daily":
+        return _cached("daily", _daily)
     if path == "/api/model":
         return _cached("model", _model_page)
     if path == "/api/journeys":

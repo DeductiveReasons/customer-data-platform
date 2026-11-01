@@ -16,6 +16,8 @@ locals {
     model_version     = "string"
     image_id          = "string"
     image_theme       = "string"
+    send_day          = "int"
+    delivery_day      = "int"
     content_selection = "string"
     opened            = "boolean"
     clicked           = "boolean"
@@ -43,6 +45,10 @@ locals {
         days_since_active           = "int"
         email_open_rate             = "double"
         wellness_member             = "int"
+        lead_source                 = "string"
+        lead_received_date          = "string"
+        next_send_day               = "int"
+        mail_in_transit             = "boolean"
         employer_id                 = "string"
         employer_name               = "string"
         employer_industry           = "string"
@@ -79,6 +85,8 @@ locals {
       description = "Every next best action message that was sent."
       location    = "${local.bucket_url}/${local.history_prefix}"
       columns = {
+        send_day       = "int"
+        delivery_day   = "int"
         message_id     = "string"
         customer_id    = "string"
         touch          = "string"
@@ -252,7 +260,7 @@ resource "aws_lambda_function" "export" {
 resource "aws_cloudwatch_event_rule" "export" {
   name                = "${var.name}-nba-export"
   schedule_expression = "rate(1 hour)"
-  state               = var.nba_schedule_enabled ? "ENABLED" : "DISABLED"
+  state               = "DISABLED" # The daily run calls this now.
 }
 
 resource "aws_cloudwatch_event_target" "export" {

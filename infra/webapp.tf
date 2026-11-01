@@ -67,7 +67,7 @@ resource "aws_iam_role_policy" "webapp" {
       {
         Effect   = "Allow"
         Action   = "s3:GetObject"
-        Resource = [for p in concat(local.webapp_read_prefixes, ["content-library/", "models/"]) : "${aws_s3_bucket.raw.arn}/${p}*"]
+        Resource = [for p in concat(local.webapp_read_prefixes, ["content-library/", "models/", "analytics/daily/"]) : "${aws_s3_bucket.raw.arn}/${p}*"]
       },
       {
         Effect   = "Allow"

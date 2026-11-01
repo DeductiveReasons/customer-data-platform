@@ -82,11 +82,32 @@ def _claim(table, message):
 def _record_send(table, message, now):
     key = {"pk": f"CUSTOMER#{message['customer_id']}", "sk": "PROFILE"}
     if message["asset_id"] == nba.assets.ONBOARDING:
-        update = "SET s_onboarded = :yes, s_last_contact = :now, s_last_image = :image"
-        values = {":yes": True, ":now": now, ":image": message["image_id"]}
+        update = (
+            "SET s_onboarded = :yes, s_last_contact = :now, s_last_image = :image, "
+            "s_next_due = :due, s_last_send_day = :day, s_last_channel = :channel"
+        )
+        values = {
+            ":yes": True,
+            ":now": now,
+            ":image": message["image_id"],
+            ":due": nba.NEVER_DUE,
+            ":day": message["send_day"],
+            ":channel": message["channel"],
+        }
     else:
-        update = "SET s_last_asset = :asset, s_last_contact = :now, s_last_image = :image ADD s_touches :one"
-        values = {":asset": message["asset_id"], ":now": now, ":image": message["image_id"], ":one": 1}
+        update = (
+            "SET s_last_asset = :asset, s_last_contact = :now, s_last_image = :image, "
+            "s_next_due = :due, s_last_send_day = :day, s_last_channel = :channel ADD s_touches :one"
+        )
+        values = {
+            ":asset": message["asset_id"],
+            ":now": now,
+            ":image": message["image_id"],
+            ":due": nba.next_due_after_send(message["channel"], message["send_day"]),
+            ":day": message["send_day"],
+            ":channel": message["channel"],
+            ":one": 1,
+        }
     table.update_item(Key=key, UpdateExpression=update, ExpressionAttributeValues=values)
 
 
@@ -127,6 +148,8 @@ def _log_decision(message, trigger):
         "image_theme",
         "content_selection",
         "content_score",
+        "send_day",
+        "delivery_day",
     )
     row = {field: message.get(field) for field in fields}
     row.update({"trigger": trigger, "decided_at": datetime.now(timezone.utc).isoformat()})
@@ -139,27 +162,37 @@ def _log_decision(message, trigger):
         print(f"history write failed for {message['message_id']}: {type(exc).__name__}")
 
 
-def _too_recent(profile, now):
-    # Scans respect a contact gap. Feedback-triggered decisions are the next step in a journey.
-    if profile.get("trigger") != "scan":
-        return False
-    last_contact = profile.get("state", {}).get("last_contact", 0)
-    return now - last_contact < nba.MIN_DAYS_BETWEEN_SCANS * 86400
+def _park(table, customer_id, state, day):
+    """Record when to look at someone again after a decision not to contact them."""
+    finished = state.get("touches", 0) >= nba.MAX_TOUCHES or state.get("onboarded")
+    due = nba.NEVER_DUE if finished else day + nba.NO_CONTACT_RECHECK_DAYS
+    table.update_item(
+        Key={"pk": f"CUSTOMER#{customer_id}", "sk": "PROFILE"},
+        UpdateExpression="SET s_next_due = :due",
+        ExpressionAttributeValues={":due": due},
+    )
 
 
 def _process(profile, table, model):
     now = int(time.time())
-    if _too_recent(profile, now):
+    day = int(profile.get("day", 0))
+    state = profile.get("state", {})
+    if state.get("next_due", 0) > day:
         return
     message = nba.decide(
         profile["customer_id"],
         profile["traits"],
         profile["consent"],
-        profile.get("state", {}),
+        state,
         model,
         pending=approvals.pending_ids(),
     )
-    if message is None or not _claim(table, message):
+    if message is None:
+        _park(table, profile["customer_id"], state, day)
+        return
+    message["send_day"] = day
+    message["delivery_day"] = day + (nba.DIRECT_MAIL_LEAD_DAYS if message["channel"] == "direct_mail" else 0)
+    if not _claim(table, message):
         return
     # The send is recorded first because feedback can arrive right after the call.
     _record_send(table, message, now)

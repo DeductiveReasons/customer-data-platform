@@ -10,8 +10,21 @@ import sys
 import boto3
 from boto3.dynamodb.conditions import Attr
 
-STATE_ATTRIBUTES = ("touches", "opens", "clicks", "registered", "onboarded", "last_asset", "last_image", "last_contact")
-RESULT_PREFIXES = ("history/", "feedback/")
+STATE_ATTRIBUTES = (
+    "touches",
+    "opens",
+    "clicks",
+    "registered",
+    "onboarded",
+    "last_asset",
+    "last_image",
+    "last_contact",
+    "next_due",
+    "last_send_day",
+    "last_channel",
+)
+START_DATE = "2026-11-02"
+RESULT_PREFIXES = ("history/", "feedback/", "analytics/daily/", "models/nba/")
 
 
 def archive_results(bucket, run_name):
@@ -34,7 +47,7 @@ def reset_profiles(table_name):
     profiles = []
     ledger = []
     kwargs = {
-        "FilterExpression": Attr("sk").eq("PROFILE") | Attr("sk").begins_with("NBA#"),
+        "FilterExpression": Attr("sk").eq("PROFILE") | Attr("sk").begins_with("NBA#") | Attr("pk").begins_with("MAILDUE#"),
         "ProjectionExpression": "pk, sk",
     }
     while True:
@@ -48,6 +61,9 @@ def reset_profiles(table_name):
     with table.batch_writer() as batch:
         for key in ledger:
             batch.delete_item(Key={"pk": key["pk"], "sk": key["sk"]})
+
+    # Day -1 means the first daily run has not started.
+    table.put_item(Item={"pk": "CONFIG#simulation", "sk": "CLOCK", "day": -1, "start_date": START_DATE})
 
     remove = "REMOVE " + ", ".join(f"s_{name}" for name in STATE_ATTRIBUTES)
 

@@ -97,6 +97,29 @@ locals {
         },
       ])
     }
+    daily-advance = {
+      handler = "cdp.daily.handler"
+      timeout = 900
+      memory  = 1024
+      environment = {
+        TABLE_NAME         = aws_dynamodb_table.profiles.name
+        DECISION_QUEUE_URL = aws_sqs_queue.nba_decisions.url
+        FEEDBACK_QUEUE_URL = aws_sqs_queue.feedback.url
+        DAILY_NEW_LEADS    = tostring(var.daily_new_leads)
+      }
+      policy = jsonencode([
+        {
+          Effect   = "Allow"
+          Action   = ["dynamodb:Scan", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:DeleteItem", "dynamodb:BatchWriteItem"]
+          Resource = aws_dynamodb_table.profiles.arn
+        },
+        {
+          Effect   = "Allow"
+          Action   = "sqs:SendMessage"
+          Resource = [aws_sqs_queue.nba_decisions.arn, aws_sqs_queue.feedback.arn]
+        },
+      ])
+    }
     archive = {
       handler = "cdp.archive.handler"
       timeout = 60
@@ -192,7 +215,7 @@ resource "aws_lambda_event_source_mapping" "nba_feedback" {
 resource "aws_cloudwatch_event_rule" "nba_retrain" {
   name                = "${var.name}-nba-retrain"
   schedule_expression = var.nba_retrain_schedule
-  state               = var.nba_schedule_enabled ? "ENABLED" : "DISABLED"
+  state               = "DISABLED" # The daily run replaces this schedule.
 }
 
 resource "aws_cloudwatch_event_target" "nba_retrain" {
@@ -241,7 +264,7 @@ resource "aws_lambda_event_source_mapping" "nba_decide" {
 resource "aws_cloudwatch_event_rule" "nba_schedule" {
   name                = "${var.name}-nba-schedule"
   schedule_expression = var.nba_schedule
-  state               = var.nba_schedule_enabled ? "ENABLED" : "DISABLED"
+  state               = "DISABLED" # The daily run replaces this schedule.
 }
 
 resource "aws_cloudwatch_event_target" "nba_schedule" {
@@ -351,6 +374,7 @@ resource "aws_lambda_function" "receiver" {
     variables = {
       TABLE_NAME         = aws_dynamodb_table.receiver.name
       SECRET_ARN         = aws_secretsmanager_secret.receiver.arn
+      PROFILES_TABLE     = aws_dynamodb_table.profiles.name
       FEEDBACK_QUEUE_URL = aws_sqs_queue.feedback.url
     }
   }

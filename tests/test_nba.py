@@ -20,11 +20,11 @@ try:
     from boto3.dynamodb.conditions import Attr  # noqa: F401
 except ImportError:
     conditions = types.ModuleType("boto3.dynamodb.conditions")
-    conditions.Attr = mock.Mock()
+    conditions.Attr = mock.MagicMock()
     sys.modules["boto3.dynamodb"] = types.ModuleType("boto3.dynamodb")
     sys.modules["boto3.dynamodb.conditions"] = conditions
 
-from cdp import approvals, archive, assets, bandit, content, nba, nba_decide, nba_export, nba_feedback, nba_retrain, nba_scan, receiver, simulator, training  # noqa: E402
+from cdp import approvals, archive, assets, bandit, content, daily, nba, nba_decide, nba_export, nba_feedback, nba_retrain, nba_scan, receiver, simulator, training  # noqa: E402
 from journey import run  # noqa: E402
 from sample_data import generate, generate_employers, to_events  # noqa: E402
 from test_cdp import ClientError  # noqa: E402
@@ -378,6 +378,7 @@ class ScanTests(unittest.TestCase):
                 "consent": {"email": True},
                 "state": {"touches": 1},
                 "trigger": "scan",
+                "day": 0,
             },
         )
         self.assertEqual(table.scan.call_args_list[1].kwargs["ExclusiveStartKey"], {"pk": "x"})
@@ -442,15 +443,33 @@ class DecideHandlerTests(unittest.TestCase):
         urlopen.assert_not_called()
         self.assertEqual(result, {"batchItemFailures": []})
 
-    def test_scan_respects_contact_gap_but_feedback_does_not(self):
-        recent = {"state": {"last_contact": 4_000_000_000}}
-        with mock.patch.object(nba_decide.urllib.request, "urlopen") as urlopen, mock.patch.object(
-            nba_decide.time, "time", return_value=4_000_000_100
-        ):
-            nba_decide.handler(self.event(trigger="scan", **recent), None)
+    def test_person_not_due_yet_is_skipped(self):
+        with mock.patch.object(nba_decide.urllib.request, "urlopen") as urlopen:
+            nba_decide.handler(self.event(day=5, state={"next_due": 6}), None)
             urlopen.assert_not_called()
-            nba_decide.handler(self.event(trigger="feedback", **recent), None)
+            nba_decide.handler(self.event(day=6, state={"next_due": 6}), None)
             urlopen.assert_called_once()
+
+    def test_direct_mail_is_delivered_seven_days_later_and_blocks_contact(self):
+        with mock.patch.object(nba_decide.urllib.request, "urlopen") as urlopen:
+            nba_decide.handler(self.event(day=10, consent={"marketing": True, "direct_mail": True}), None)
+        payload = json.loads(urlopen.call_args.args[0].data)
+        self.assertEqual((payload["channel"], payload["send_day"], payload["delivery_day"]), ("direct_mail", 10, 17))
+        values = self.table.update_item.call_args.kwargs["ExpressionAttributeValues"]
+        self.assertEqual(values[":due"], 24)
+
+    def test_email_is_delivered_the_same_day(self):
+        with mock.patch.object(nba_decide.urllib.request, "urlopen") as urlopen:
+            nba_decide.handler(self.event(day=10, consent={"marketing": True, "email": True}), None)
+        payload = json.loads(urlopen.call_args.args[0].data)
+        self.assertEqual(payload["delivery_day"], 10)
+        self.assertEqual(self.table.update_item.call_args.kwargs["ExpressionAttributeValues"][":due"], 13)
+
+    def test_no_contact_is_checked_again_later_and_finished_people_never(self):
+        nba_decide.handler(self.event(day=3, consent={}), None)
+        self.assertEqual(self.table.update_item.call_args.kwargs["ExpressionAttributeValues"][":due"], 33)
+        nba_decide.handler(self.event(day=3, state={"touches": nba.MAX_TOUCHES}), None)
+        self.assertEqual(self.table.update_item.call_args.kwargs["ExpressionAttributeValues"][":due"], nba.NEVER_DUE)
 
     def test_failed_call_releases_claim_and_retries(self):
         with mock.patch.object(nba_decide.urllib.request, "urlopen", side_effect=OSError()):
@@ -503,16 +522,15 @@ class FeedbackHandlerTests(unittest.TestCase):
         self.assertEqual(self.run_handler(), {"batchItemFailures": []})
         items = self.resource.meta.client.transact_write_items.call_args.kwargs["TransactItems"]
         self.assertIn("s_registered", items[1]["Update"]["UpdateExpression"])
-        archived, decision = self.sqs.send_message.call_args_list
-        body = json.loads(archived.kwargs["MessageBody"])
+        self.sqs.send_message.assert_called_once()  # The next decision waits for the daily run.
+        body = json.loads(self.sqs.send_message.call_args.kwargs["MessageBody"])
         self.assertEqual(body["dataset"], "feedback_email")
         record = body["row"]
         self.assertTrue(record["registered"])
         self.assertTrue(record["feedback_at"])
         self.assertEqual(record["asset_id"], "free_trial")
-        next_decision = json.loads(decision.kwargs["MessageBody"])
-        self.assertEqual(next_decision["trigger"], "feedback")
-        self.assertTrue(next_decision["state"]["registered"])
+        items = self.resource.meta.client.transact_write_items.call_args.kwargs["TransactItems"]
+        self.assertIn("s_next_due", items[1]["Update"]["UpdateExpression"])
 
     def test_unsubscribe_removes_channel_consent(self):
         self.run_handler(outcome={"opened": False, "clicked": False, "registered": False, "unsubscribed": True})
@@ -529,7 +547,7 @@ class FeedbackHandlerTests(unittest.TestCase):
             "TransactWriteItems",
         )
         self.assertEqual(self.run_handler(), {"batchItemFailures": []})
-        self.assertEqual(self.sqs.send_message.call_count, 2)
+        self.sqs.send_message.assert_called_once()
 
     def test_other_transaction_failures_retry(self):
         self.resource.meta.client.transact_write_items.side_effect = ClientError(
@@ -592,6 +610,83 @@ class NextActionTimeTests(unittest.TestCase):
         saturday = datetime(2026, 10, 31, 12, 0, tzinfo=timezone.utc)
         result = nba.next_action_time({"state": "NY"}, {}, "direct_mail", saturday)
         self.assertEqual(result, "2026-11-02T15:00:00+00:00")
+
+
+class DailyTests(unittest.TestCase):
+    def test_sim_dates(self):
+        self.assertEqual(daily.sim_date("2026-11-02", 7), "2026-11-09")
+
+    def test_mail_outcomes_are_released_only_on_delivery_day(self):
+        table = mock.Mock()
+        table.query.return_value = {"Items": [{"pk": "MAILDUE#9", "sk": "m1", "feedback": "{}"}]}
+        sqs = mock.Mock()
+        self.assertEqual(daily.release_mail(table, sqs, "q", 9), 1)
+        self.assertEqual(table.query.call_args.kwargs["ExpressionAttributeValues"], {":pk": "MAILDUE#9"})
+        sqs.send_message.assert_called_once_with(QueueUrl="q", MessageBody="{}")
+        table.delete_item.assert_called_once()
+
+    def test_new_leads_average_about_two_hundred(self):
+        table = mock.MagicMock()
+        count = daily.add_new_leads(table, 3, "2026-11-05", 200)
+        self.assertTrue(170 <= count <= 230)
+        self.assertEqual(daily.add_new_leads(table, 3, "2026-11-05", 0), 0)
+        batch = table.batch_writer.return_value.__enter__.return_value
+        profiles = [c.kwargs["Item"] for c in batch.put_item.call_args_list if c.kwargs["Item"]["sk"] == "PROFILE"]
+        self.assertEqual(len(profiles), count)
+        self.assertEqual(profiles[0]["t_lead_received_date"], "2026-11-05")
+        self.assertTrue(profiles[0]["pk"].startswith("CUSTOMER#lead-1000003-"))
+
+    def test_advancing_moves_one_day_and_queues_who_is_due(self):
+        table = mock.Mock()
+        table.get_item.return_value = {"Item": {"day": 4, "start_date": "2026-11-02"}}
+        table.query.return_value = {"Items": []}
+        table.scan.return_value = {"Items": [{"pk": "CUSTOMER#a", "sk": "PROFILE"}]}
+        sqs = mock.Mock()
+        sqs.send_message_batch.return_value = {}
+        boto = mock.Mock()
+        boto.resource.return_value.Table.return_value = table
+        boto.client.return_value = sqs
+        with mock.patch.object(daily, "boto3", boto), mock.patch.dict(
+            os.environ, {"TABLE_NAME": "t", "FEEDBACK_QUEUE_URL": "f", "DECISION_QUEUE_URL": "d"}
+        ):
+            result = daily.handler({}, None)
+        self.assertEqual(result, {"day": 5, "date": "2026-11-07", "new_leads": 0, "mail_delivered": 0, "queued": 1})
+        body = json.loads(sqs.send_message_batch.call_args.kwargs["Entries"][0]["MessageBody"])
+        self.assertEqual(body["day"], 5)
+
+
+class SnapshotTests(unittest.TestCase):
+    CLOCK = {"day": 10, "start_date": "2026-11-02"}
+
+    def row(self, action, send_day=None, last_channel=None, last_send_day=None, in_transit=False, touches=0, registered=False):
+        return {
+            "next_best_action": action,
+            "next_send_day": send_day,
+            "last_channel": last_channel,
+            "last_send_day": last_send_day,
+            "mail_in_transit": in_transit,
+            "touches": touches,
+            "registered": registered,
+        }
+
+    def test_forecast_and_rate(self):
+        rows = [
+            self.row("email", 11),
+            self.row("direct_mail", 12),
+            self.row("no_contact", touches=2, registered=True),
+            self.row("no_contact", last_channel="direct_mail", last_send_day=6, in_transit=True, touches=1),
+        ]
+        snapshot = nba_export.daily_snapshot(rows, self.CLOCK)
+        self.assertEqual((snapshot["nba_email"], snapshot["nba_direct_mail"], snapshot["nba_no_contact"]), (1, 1, 2))
+        self.assertEqual(snapshot["registration_rate"], 0.25)
+        self.assertEqual(snapshot["registration_rate_contacted"], 0.5)
+        self.assertEqual(snapshot["mail_in_transit"], 1)
+        by_day = {item["day"]: item for item in snapshot["forecast"]}
+        self.assertEqual(by_day[11]["email_sends"], 1)
+        self.assertEqual(by_day[12]["direct_mail_sends"], 1)
+        self.assertEqual(by_day[19]["direct_mail_deliveries"], 1)  # Planned mail arrives 7 days after sending.
+        self.assertEqual(by_day[13]["direct_mail_deliveries"], 1)  # Mail already on its way.
+        self.assertEqual(len(snapshot["forecast"]), 14)
 
 
 class ExportTests(unittest.TestCase):
