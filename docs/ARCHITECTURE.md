@@ -118,7 +118,7 @@ Every variation is auto-approved for now. The Digital assets page can set one to
 | Overview | Totals, registration rates, next best actions and the endpoint library |
 | Performance | Funnels by asset and channel |
 | Digital assets | Every variation, with previews and approval status |
-| Campaigns | The five campaign assets and their results |
+| Journeys | The most successful message sequences, compared by number of messages |
 | Image library | All 100 images and their results |
 | People | Search, then each person's profile, scores and previous messages |
 | Monitoring | Queues, failed messages, function errors and alarms |

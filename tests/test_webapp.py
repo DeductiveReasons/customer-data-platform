@@ -157,6 +157,26 @@ class VariationTests(unittest.TestCase):
         self.set_status.assert_called_once_with(good, "pending_approval")
 
 
+class JourneyTests(unittest.TestCase):
+    def test_returns_journeys_and_requires_password(self):
+        webapp._cache.clear()
+        self.addCleanup(webapp._cache.clear)
+        rows = [{"journey": "free_trial:email>coach_consult:email", "steps": "2", "reached": "50", "registered": "5"}]
+        with mock.patch.object(webapp, "_get_token", return_value="secret"), mock.patch.object(
+            webapp, "run_query", return_value=rows
+        ) as query:
+            self.assertEqual(webapp.handler(request("/api/journeys", token=None), None)["statusCode"], 401)
+            query.assert_not_called()
+            body = json.loads(webapp.handler(request("/api/journeys"), None)["body"])
+        self.assertEqual(body["journeys"], rows)
+        self.assertEqual(body["min_people"], webapp.JOURNEY_MIN_PEOPLE)
+        self.assertIn("direct_mail", body["channel_cost"])
+
+    def test_query_counts_each_step_and_excludes_onboarding(self):
+        self.assertIn("touch <> 'onboarding'", webapp.JOURNEY_SQL)
+        self.assertIn("HAVING COUNT(*) >= 30", webapp.JOURNEY_SQL)
+
+
 class ProfileTests(unittest.TestCase):
     PROFILE = {
         "customer_id": "c1",

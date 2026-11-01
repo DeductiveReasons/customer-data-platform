@@ -81,6 +81,48 @@ WHERE h.customer_id = ?
 ORDER BY h.decided_at
 """
 
+JOURNEY_MIN_PEOPLE = 30
+JOURNEY_LIMIT = 300
+JOURNEY_BASE_SQL = """
+WITH sends AS (
+  SELECT DISTINCT customer_id, message_id, TRY_CAST(touch AS integer) AS step, asset_id, channel
+  FROM nba_history WHERE touch <> 'onboarding'
+),
+outcomes AS (
+  SELECT message_id, BOOL_OR(registered) AS registered
+  FROM (SELECT message_id, registered FROM email_engagement
+        UNION ALL SELECT message_id, registered FROM direct_mail_engagement)
+  GROUP BY message_id
+),
+steps AS (
+  SELECT s.customer_id, s.step,
+         COALESCE(o.registered, false) AS registered,
+         ARRAY_AGG(s.asset_id || ':' || s.channel) OVER (
+           PARTITION BY s.customer_id ORDER BY s.step ROWS UNBOUNDED PRECEDING
+         ) AS sequence
+  FROM sends s LEFT JOIN outcomes o ON s.message_id = o.message_id
+  WHERE s.step IS NOT NULL
+)
+"""
+JOURNEY_SQL = (
+    JOURNEY_BASE_SQL
+    + f"""
+SELECT ARRAY_JOIN(sequence, '>') AS journey, step AS steps,
+       COUNT(*) AS reached, COUNT_IF(registered) AS registered
+FROM steps
+GROUP BY sequence, step
+HAVING COUNT(*) >= {JOURNEY_MIN_PEOPLE}
+ORDER BY CAST(COUNT_IF(registered) AS double) / COUNT(*) DESC
+LIMIT {JOURNEY_LIMIT}
+"""
+)
+JOURNEY_STEP_SQL = (
+    JOURNEY_BASE_SQL
+    + """
+SELECT step AS steps, COUNT(*) AS reached, COUNT_IF(registered) AS registered
+FROM steps GROUP BY step ORDER BY step
+"""
+)
 COST_CACHE_SECONDS = 3600  # Each Cost Explorer request costs about one cent.
 USAGE_DAYS = 30
 VARIATION_PAGE_SIZE = 12
@@ -201,9 +243,10 @@ def _endpoints():
         {"group": "Dummy receiver", "method": "GET", "url": f"{receiver}/messages", "auth": "Bearer token", "purpose": "Lists a sample of the requests received"},
         {"group": "Console", "method": "GET", "url": "/api/overview", "auth": "Password", "purpose": "Totals, registration rate and endpoint library"},
         {"group": "Console", "method": "GET", "url": "/api/performance", "auth": "Password", "purpose": "Funnels and current next best actions"},
-        {"group": "Console", "method": "GET", "url": "/api/assets", "auth": "Password", "purpose": "Campaign assets and previews"},
+        {"group": "Console", "method": "GET", "url": "/api/assets", "auth": "Password", "purpose": "Campaign asset names and previews"},
         {"group": "Console", "method": "GET", "url": "/api/variations", "auth": "Password", "purpose": "Browse every deliverable variation and its approval status"},
         {"group": "Console", "method": "POST", "url": "/api/variations/{id}/status", "auth": "Password", "purpose": "Approve a variation or set it to pending approval"},
+        {"group": "Console", "method": "GET", "url": "/api/journeys", "auth": "Password", "purpose": "Most successful message sequences"},
         {"group": "Console", "method": "GET", "url": "/api/content", "auth": "Password", "purpose": "Image library results"},
         {"group": "Console", "method": "GET", "url": "/api/people", "auth": "Password", "purpose": "Search and filter people"},
         {"group": "Console", "method": "GET", "url": "/api/people/{id}", "auth": "Password", "purpose": "One person's profile, scores and messages"},
@@ -333,6 +376,15 @@ def _set_variation_status(variation, body):
         raise BadRequest("unknown status")
     approvals.set_status(variation, status)
     return {"id": variation, "status": status}
+
+
+def _journeys():
+    return {
+        "journeys": run_query(JOURNEY_SQL),
+        "by_step": run_query(JOURNEY_STEP_SQL),
+        "min_people": JOURNEY_MIN_PEOPLE,
+        "channel_cost": nba.CHANNEL_COST,
+    }
 
 
 def _people(query):
@@ -651,6 +703,8 @@ def _route(path, query):
         return _cached("usage", _usage)
     if path == "/api/variations":
         return _variations(query)
+    if path == "/api/journeys":
+        return _cached("journeys", _journeys)
     if path == "/api/people":
         return _people(query)
     if path == "/api/monitoring":

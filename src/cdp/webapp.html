@@ -37,6 +37,7 @@ tr.link{cursor:pointer}tr.link:hover{background:var(--accent-soft)}
 .images{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:12px}.images figure{margin:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}.images img{display:block;width:100%;aspect-ratio:2/1}.images figcaption{padding:7px 9px;font-size:12px;color:var(--muted)}.images figcaption b{display:block;color:var(--text);font-size:13px}.thumb{width:72px;aspect-ratio:2/1;display:block;border-radius:4px}
 .profile{display:flex;flex-wrap:wrap;gap:16px;align-items:center}.avatar{width:84px;height:84px;border-radius:50%;display:grid;place-items:center;color:#fff;font-size:30px;font-weight:700;flex:none}.who{flex:1;min-width:210px}.who h1{margin:0}.who p{margin:2px 0}.nextimg{margin:0;width:190px;max-width:100%}.nextimg img{width:100%;aspect-ratio:2/1;object-fit:cover;border-radius:6px;display:block}.nextimg figcaption{font-size:12px;color:var(--muted)}.details{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px 18px;margin:0}.details dt{color:var(--muted);font-size:13px}.details dd{margin:0}.msg{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;padding:11px 0;border-top:1px solid var(--line);font-size:14px}.msgbody{flex:1;min-width:230px}.msgframe{width:100%;height:430px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}.vcard{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:0 0 12px;overflow:hidden}.vcard>img{display:block;width:100%;aspect-ratio:2/1;object-fit:cover}.vcard .vb{padding:10px 12px 0;font-size:14px}.vcard .vb b{display:block}.vactions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.approved{background:#d9f2e3;color:#116b3a;border-radius:5px;padding:1px 7px;font-size:12px;font-weight:600}.pending{background:#fbeccb;color:#8a5200;border-radius:5px;padding:1px 7px;font-size:12px;font-weight:600}.vframe{width:100%;height:560px;border:1px solid var(--line);border-radius:6px;background:#fff;margin-top:8px}.pager{display:flex;gap:10px;align-items:center;margin-top:14px}
+.path{list-style:none;display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;white-space:normal}.path li{background:var(--accent-soft);border-radius:6px;padding:3px 9px;font-size:13px;position:relative}.path li b{display:block;font-weight:600}.path li span{color:var(--muted);font-size:12px}
 .asset iframe{width:100%;height:340px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .asset h2{margin-bottom:2px}
 .tag{display:inline-block;background:var(--accent-soft);border-radius:5px;padding:0 7px;font-size:12px}
@@ -71,7 +72,7 @@ a{color:var(--accent)}
   <main id="view" tabindex="-1"></main>
 </div>
 <script>
-const VIEWS={overview:'Overview',performance:'Performance',variations:'Digital assets',assets:'Campaigns',content:'Image library',people:'People',monitoring:'Monitoring',usage:'Usage and costs'};
+const VIEWS={overview:'Overview',performance:'Performance',variations:'Digital assets',journeys:'Journeys',content:'Image library',people:'People',monitoring:'Monitoring',usage:'Usage and costs'};
 const STATUSES={active:'Active journey',onboarding_due:'Onboarding due',registered:'Registered',journey_complete:'Journey complete',no_marketing_consent:'No marketing consent',no_contact_option:'No contact option'};
 const LABELS={email:'Email',direct_mail:'Direct mail',no_contact:'No contact'};
 const when=v=>{if(!v)return '–';const d=new Date(v);return isNaN(d)?v:d.toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})};
@@ -131,19 +132,20 @@ const render={
    {t:'People',n:1,f:r=>num(r.people)},{t:'Avg. propensity',n:1,f:r=>(100*Number(r.avg_propensity)).toFixed(1)+'%'},
    {t:'Avg. expected value',n:1,f:r=>'$'+Number(r.avg_expected_value).toFixed(2)}],d.next_actions)}</div>`;
  },
- async assets(){
-  const d=await api('/api/assets');
-  const after=()=>{document.querySelectorAll('.asset').forEach(card=>{
-    card.querySelectorAll('[data-ch]').forEach(b=>b.onclick=()=>{
-      card.querySelectorAll('[data-ch]').forEach(x=>x.classList.toggle('on',x===b));
-      card.querySelector('iframe').srcdoc=d.assets.find(a=>a.id===card.dataset.id)[b.dataset.ch+'_html']})})};
-  view._after=after;
-  return `<h1>Campaigns</h1><p class="sub">${esc(d.brand.disclaimer)} Goal: ${esc(d.brand.goal)}.</p><div class="assets">${d.assets.map(a=>{
-   const rows=d.funnel.filter(r=>r.asset_id===a.id),t=funnelTotals(rows);
-   return `<article class="panel asset" data-id="${esc(a.id)}"><h2>${esc(a.name)}</h2><span class="tag">${esc(a.stage)}</span>
-    <p class="muted">${esc(a.subject)}</p><p>${num(t.delivered)} delivered · ${num(t.registered)} registered · ${pct(t.registered,t.delivered)} sign-up rate</p>
-    <div class="seg"><button class="small on" data-ch="email">Email</button><button class="small" data-ch="direct_mail">Direct mail</button></div>
-    <iframe sandbox title="${esc(a.name)} preview" srcdoc="${esc(a.email_html)}"></iframe></article>`}).join('')}</div>`;
+ async journeys(params={}){
+  const d=await api('/api/journeys'),len=Number(params.len)||1;
+  const rows=d.journeys.filter(j=>Number(j.steps)===len).map(j=>({...j,rate:Number(j.registered)/Number(j.reached)}));
+  rows.sort((a,b)=>b.rate-a.rate);
+  const margin=r=>1.96*Math.sqrt(r.rate*(1-r.rate)/Number(r.reached));
+  const stepHtml=j=>`<ol class="path">${j.journey.split('>').map(s=>{const [asset,channel]=s.split(':');return `<li><b>${esc(assetName(asset))}</b><span>${esc(LABELS[channel]||channel)}</span></li>`}).join('')}</ol>`;
+  const best=rows[0],costOf=j=>j.journey.split('>').reduce((s,x)=>s+Number(d.channel_cost[x.split(':')[1]]||0),0);
+  view._after=()=>{document.querySelectorAll('[data-len]').forEach(b=>b.onclick=()=>show('journeys',{len:b.dataset.len}))};
+  return `<h1>Journeys</h1><p class="sub">The message sequences that lead to the most registrations. Results are simulated.</p>
+  <div class="notice">Each rate shows how many people who reached a sequence registered at its final message. People who register stop receiving messages, so compare journeys with the same number of messages. Only sequences with at least ${num(d.min_people)} people are shown.</div>
+  <div class="panel"><h2>Registrations by message number</h2>${table([{t:'Message',f:s=>'Message '+s.steps},{t:'People reached',n:1,f:s=>num(s.reached)},{t:'Registered at this message',n:1,f:s=>num(s.registered)},{t:'Rate',n:1,f:s=>pct(s.registered,s.reached)}],d.by_step)}</div>
+  <div class="seg" role="group" aria-label="Number of messages">${[1,2,3,4].map(n=>`<button class="small ${n===len?'on':''}" data-len="${n}">${n} message${n>1?'s':''}</button>`).join('')}</div>
+  ${best?`<div class="panel"><h2>Most successful ${len}-message journey</h2>${stepHtml(best)}<div class="tiles" style="margin:14px 0 0"><div class="tile"><b>${(100*best.rate).toFixed(1)}%</b><span>Registered, ±${(100*margin(best)).toFixed(1)} points</span></div><div class="tile"><b>${num(best.reached)}</b><span>People reached</span></div><div class="tile"><b>${num(best.registered)}</b><span>Registered</span></div><div class="tile"><b>$${costOf(best).toFixed(2)}</b><span>Assumed cost per person</span></div></div></div>`:''}
+  <div class="panel"><h2>All ${len}-message journeys, best first</h2>${table([{t:'#',f:(r)=>rows.indexOf(r)+1},{t:'Journey',h:stepHtml},{t:'People',n:1,f:r=>num(r.reached)},{t:'Registered',n:1,f:r=>num(r.registered)},{t:'Rate',n:1,f:r=>(100*r.rate).toFixed(1)+'%'},{t:'Margin',n:1,f:r=>'±'+(100*margin(r)).toFixed(1)},{t:'Assumed cost',n:1,f:r=>'$'+costOf(r).toFixed(2)}],rows,{empty:'No journeys of this length have enough people yet.'})}</div>`;
  },
  async variations(params={}){
   const q=new URLSearchParams();['asset','channel','theme','status','page'].forEach(k=>{if(params[k])q.set(k,params[k])});
