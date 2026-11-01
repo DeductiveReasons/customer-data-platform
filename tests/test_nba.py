@@ -256,6 +256,15 @@ class GradientBoostingTests(unittest.TestCase):
         self.assertNotEqual(scores[0], scores[1])
 
 
+class RegistrationTimingTests(unittest.TestCase):
+    def test_most_register_within_thirty_days_with_a_long_tail(self):
+        lags = [simulator.registration_lag(f"m{index}") for index in range(5000)]
+        self.assertGreater(sum(lag <= 30 for lag in lags) / len(lags), 0.65)
+        self.assertLess(sum(lag <= 30 for lag in lags) / len(lags), 0.8)
+        self.assertGreater(max(lags), 200)
+        self.assertLessEqual(max(lags), 331)
+
+
 class EmployerTests(unittest.TestCase):
     def test_employers_are_labelled_and_assigned(self):
         employers = generate_employers()
@@ -650,7 +659,7 @@ class DailyTests(unittest.TestCase):
             os.environ, {"TABLE_NAME": "t", "FEEDBACK_QUEUE_URL": "f", "DECISION_QUEUE_URL": "d"}
         ):
             result = daily.handler({}, None)
-        self.assertEqual(result, {"day": 5, "date": "2026-11-07", "new_leads": 0, "mail_delivered": 0, "queued": 1})
+        self.assertEqual(result, {"day": 5, "date": "2026-11-07", "new_leads": 0, "mail_delivered": 0, "registered": 0, "queued": 1})
         body = json.loads(sqs.send_message_batch.call_args.kwargs["Entries"][0]["MessageBody"])
         self.assertEqual(body["day"], 5)
 
@@ -687,6 +696,12 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(by_day[19]["direct_mail_deliveries"], 1)  # Planned mail arrives 7 days after sending.
         self.assertEqual(by_day[13]["direct_mail_deliveries"], 1)  # Mail already on its way.
         self.assertEqual(len(snapshot["forecast"]), 14)
+        self.assertEqual([band["registered"] for band in snapshot["registration_timing"]], [0, 0, 0, 0, 0])
+
+    def test_timing_bands(self):
+        rows = [{**self.row("no_contact"), "days_to_register": days} for days in (3, 30, 31, 200)]
+        timing = nba_export.daily_snapshot(rows, self.CLOCK)["registration_timing"]
+        self.assertEqual([band["registered"] for band in timing], [1, 1, 1, 0, 1])
 
 
 class ExportTests(unittest.TestCase):
@@ -767,7 +782,7 @@ class ReceiverTests(unittest.TestCase):
         self.assertFalse(json.loads(response["body"])["sent"])
         self.table.put_item.assert_called_once()
         feedback = json.loads(self.sqs.send_message.call_args.kwargs["MessageBody"])
-        self.assertEqual(set(feedback["outcome"]), {"opened", "clicked", "registered", "unsubscribed"})
+        self.assertEqual(set(feedback["outcome"]), {"opened", "clicked", "registered", "unsubscribed", "registration_lag_days"})
         self.assertEqual(feedback["message_id"], self.message["message_id"])
 
     def test_onboarding_has_no_feedback(self):

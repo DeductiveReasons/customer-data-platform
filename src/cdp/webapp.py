@@ -1,5 +1,6 @@
 """Password-protected web app for performance, assets, people and monitoring."""
 import base64
+import concurrent.futures
 import hmac
 import json
 import math
@@ -203,10 +204,10 @@ WHERE content_selection IN ('bandit', 'holdout') AND send_day IS NOT NULL
 GROUP BY send_day, content_selection ORDER BY send_day
 """
 BANDIT_THEME_BY_DAY_SQL = f"""
-SELECT send_day AS day, image_theme AS theme, COUNT(DISTINCT message_id) AS messages
+SELECT send_day / 7 * 7 AS day, image_theme AS theme, COUNT(DISTINCT message_id) AS messages
 FROM {ENGAGEMENT_SQL}
 WHERE content_selection = 'bandit' AND send_day IS NOT NULL
-GROUP BY send_day, image_theme ORDER BY send_day
+GROUP BY send_day / 7 * 7, image_theme ORDER BY 1
 """
 BANDIT_THEME_SQL = f"""
 SELECT image_theme AS theme, content_selection AS selection,
@@ -503,10 +504,15 @@ def _model_page():
 def _daily():
     s3 = boto3.client("s3")
     bucket = os.environ["IMAGE_BUCKET"]
-    snapshots = []
+    keys = []
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="analytics/daily/"):
-        for item in page.get("Contents", []):
-            snapshots.append(json.loads(s3.get_object(Bucket=bucket, Key=item["Key"])["Body"].read()))
+        keys.extend(item["Key"] for item in page.get("Contents", []))
+
+    def read(key):
+        return json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+        snapshots = list(pool.map(read, keys))
     snapshots.sort(key=lambda snapshot: snapshot["day"])
     return {
         "snapshots": snapshots,

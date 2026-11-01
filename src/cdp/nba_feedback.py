@@ -25,11 +25,14 @@ def _apply(resource, table_name, feedback, profile_key, ledger_key):
     updates = ["ADD s_opens :opens, s_clicks :clicks"]
     values = {":opens": int(outcome["opened"]), ":clicks": int(outcome["clicked"])}
     sets = []
-    if outcome["registered"]:
+    lag = int(outcome.get("registration_lag_days") or 0)
+    if outcome["registered"] and lag == 0:
         # The welcome message goes out in the next daily run.
-        sets.extend(["s_registered = :yes", "s_next_due = :due"])
+        day = int(feedback.get("delivery_day") or 0)
+        sets.extend(["s_registered = :yes", "s_registered_day = :day", "s_next_due = :due"])
         values[":yes"] = True
-        values[":due"] = int(feedback.get("delivery_day") or 0) + 1
+        values[":day"] = day
+        values[":due"] = day + 1
     names = {}
     if outcome["unsubscribed"]:
         # Opting out removes that channel's consent, which later decisions enforce.
@@ -131,6 +134,16 @@ def _process(feedback, resource, sqs):
 
     if _apply(resource, table_name, feedback, profile_key, ledger_key):
         _emit_metrics(feedback)
+        lag = int(feedback["outcome"].get("registration_lag_days") or 0)
+        if feedback["outcome"]["registered"] and lag > 0:
+            # People often register some time after engaging, so this stays hidden until that day.
+            resource.Table(table_name).put_item(
+                Item={
+                    "pk": f"REGDUE#{int(feedback.get('delivery_day') or 0) + lag}",
+                    "sk": feedback["customer_id"],
+                    "customer_id": feedback["customer_id"],
+                }
+            )
     sqs.send_message(
         QueueUrl=os.environ["ARCHIVE_QUEUE_URL"],
         MessageBody=json.dumps({"dataset": f"feedback_{feedback['channel']}", "row": training_record(feedback)}),

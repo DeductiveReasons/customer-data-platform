@@ -22,6 +22,7 @@ STATE_ATTRIBUTES = (
     "next_due",
     "last_send_day",
     "last_channel",
+    "registered_day",
 )
 START_DATE = "2026-11-02"
 RESULT_PREFIXES = ("history/", "feedback/", "analytics/daily/", "models/nba/")
@@ -47,7 +48,7 @@ def reset_profiles(table_name):
     profiles = []
     ledger = []
     kwargs = {
-        "FilterExpression": Attr("sk").eq("PROFILE") | Attr("sk").begins_with("NBA#") | Attr("pk").begins_with("MAILDUE#"),
+        "FilterExpression": Attr("sk").eq("PROFILE") | Attr("sk").begins_with("NBA#") | Attr("pk").begins_with("MAILDUE#") | Attr("pk").begins_with("REGDUE#"),
         "ProjectionExpression": "pk, sk",
     }
     while True:

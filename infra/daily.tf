@@ -133,6 +133,30 @@ resource "aws_iam_role_policy" "receiver_mail" {
   })
 }
 
+resource "aws_iam_role_policy" "feedback_registrations" {
+  role = aws_iam_role.lambda["nba-feedback"].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "dynamodb:PutItem"
+      Resource = aws_dynamodb_table.profiles.arn
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "advance_registrations" {
+  role = aws_iam_role.lambda["daily-advance"].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "dynamodb:UpdateItem"
+      Resource = aws_dynamodb_table.profiles.arn
+    }]
+  })
+}
+
 resource "aws_iam_role_policy" "export_daily" {
   role = aws_iam_role.export.id
   policy = jsonencode({

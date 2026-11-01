@@ -2,7 +2,7 @@
 import gzip
 import json
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import boto3
 from boto3.dynamodb.conditions import Attr
@@ -29,6 +29,14 @@ def _status(state, consent, decision):
     if state.get("touches", 0) >= nba.MAX_TOUCHES:
         return "journey_complete"
     return "no_contact_option"
+
+
+def _days_to_register(traits, state, clock):
+    if state.get("registered_day") is None:
+        return None
+    received = traits.get("lead_received_date") or clock["start_date"]
+    days = (date.fromisoformat(clock["start_date"]) - date.fromisoformat(received)).days
+    return int(state["registered_day"]) + days
 
 
 def person_row(item, snapshot_at, model, pending=frozenset(), clock=None):
@@ -73,6 +81,7 @@ def person_row(item, snapshot_at, model, pending=frozenset(), clock=None):
         "status": _status(state, consent, decision),
         "next_best_action": decision["channel"] if decision else "no_contact",
         "next_send_day": send_day,
+        "days_to_register": _days_to_register(traits, state, clock),
         "next_best_action_time": (
             nba.send_time_on(traits, decision["channel"], daily.sim_date(clock["start_date"], send_day))
             if decision
@@ -118,6 +127,9 @@ def _metrics(rows):
         "PeopleWithNextAction": count(lambda r: r["next_best_asset"]),
     }
     return [{"MetricName": name, "Value": value, "Unit": "Count"} for name, value in totals.items()]
+
+
+TIMING_BANDS = ((0, 7, "0-7 days"), (8, 30, "8-30 days"), (31, 90, "31-90 days"), (91, 180, "91-180 days"), (181, 100000, "181-365 days"))
 
 
 def daily_snapshot(rows, clock):
@@ -169,6 +181,15 @@ def daily_snapshot(rows, clock):
         "nba_direct_mail": actions.get("direct_mail", 0),
         "nba_no_contact": actions.get("no_contact", 0),
         "mail_in_transit": sum(1 for row in rows if row["mail_in_transit"]),
+        "registration_timing": [
+            {
+                "band": label,
+                "registered": sum(
+                    1 for row in rows if row.get("days_to_register") is not None and low <= row["days_to_register"] <= high
+                ),
+            }
+            for low, high, label in TIMING_BANDS
+        ],
         "forecast": forecast,
     }
 

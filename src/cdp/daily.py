@@ -5,6 +5,7 @@ import random
 from datetime import date, timedelta
 
 import boto3
+from botocore.exceptions import ClientError
 
 from cdp import nba_scan, sample_data
 
@@ -53,6 +54,33 @@ def release_mail(table, sqs, queue_url, day):
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
 
 
+def release_registrations(table, day):
+    """Mark people who register today after engaging earlier."""
+    released = 0
+    kwargs = {
+        "KeyConditionExpression": "pk = :pk",
+        "ExpressionAttributeValues": {":pk": f"REGDUE#{day}"},
+    }
+    while True:
+        page = table.query(**kwargs)
+        for item in page["Items"]:
+            try:
+                table.update_item(
+                    Key={"pk": f"CUSTOMER#{item['customer_id']}", "sk": "PROFILE"},
+                    UpdateExpression="SET s_registered = :yes, s_registered_day = :day, s_next_due = :due",
+                    ConditionExpression="attribute_not_exists(s_registered)",
+                    ExpressionAttributeValues={":yes": True, ":day": day, ":due": day + 1},
+                )
+                released += 1
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                    raise
+            table.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
+        if "LastEvaluatedKey" not in page:
+            return released
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+
+
 def handler(_event, _context):
     table = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
     sqs = boto3.client("sqs")
@@ -62,7 +90,8 @@ def handler(_event, _context):
     today = sim_date(clock["start_date"], day)
     new_leads = add_new_leads(table, day, today, int(os.environ.get("DAILY_NEW_LEADS", "0")))
     released = release_mail(table, sqs, os.environ["FEEDBACK_QUEUE_URL"], day)
+    registered = release_registrations(table, day)
     queued = nba_scan.queue_due(table, sqs, os.environ["DECISION_QUEUE_URL"], day)
-    result = {"day": day, "date": today, "new_leads": new_leads, "mail_delivered": released, "queued": queued}
+    result = {"day": day, "date": today, "new_leads": new_leads, "mail_delivered": released, "registered": registered, "queued": queued}
     print(json.dumps(result))
     return result

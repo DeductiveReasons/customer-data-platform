@@ -25,6 +25,14 @@ THEME_EFFECT = {
 }
 
 
+def registration_lag(message_id):
+    """Days between engaging with a message and registering: most are quick, with a long tail."""
+    rng = random.Random(f"{message_id}|lag")
+    if rng.random() < 0.72:
+        return min(30, int(rng.expovariate(1 / 6)))
+    return 31 + int(rng.betavariate(1.0, 2.2) * 300)
+
+
 def employer_effect(asset_id, f):
     """Invented effects, including interactions a simple linear model cannot represent."""
     subsidy = f.get("employer_fitness_subsidy", 0)
@@ -78,4 +86,5 @@ def outcome_for(message_id, asset_id, features, theme=None):
         "clicked": clicked,
         "registered": registered,
         "unsubscribed": unsubscribed,
+        "registration_lag_days": registration_lag(message_id) if registered else 0,
     }
