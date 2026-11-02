@@ -6,6 +6,18 @@ Failures in Braze, a CRM or any other destination never stop events from being r
 
 It also includes a next best action demo for Eric Health, a fictional company: 10,000 made-up people, propensity models, 1,000 message variations with approval statuses, a dummy email and direct mail service, a feedback loop and a web app. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design, and [docs/PRODUCTION_REQUIREMENTS.md](docs/PRODUCTION_REQUIREMENTS.md) for what it would take to run this in production, including the AWS accounts and services to provision.
 
+## Live snapshot
+
+[Open the web app snapshot](https://deductivereasons.github.io/customer-data-platform/demo/) to browse the console with data from a deployed instance after its 365-day simulation. It is read-only, every person in it is simulated, and deployment addresses and account details are removed. The files are in `docs/demo`.
+
+To refresh it from your own deployment, install Pillow so images are resized, then run:
+
+```sh
+cd infra
+export CDP_WEBAPP_PASSWORD="$(aws secretsmanager get-secret-value --secret-id "$(terraform output -raw webapp_secret)" --query SecretString --output text)"
+python ../scripts/export_demo.py "$(terraform output -raw webapp_url)"
+```
+
 ## Quick start
 
 You need an AWS account, the AWS CLI, Terraform 1.6+ and Python 3.12. This creates billable resources, so set an AWS budget first. Running the full demo cost us a small amount, but check your own bill.
