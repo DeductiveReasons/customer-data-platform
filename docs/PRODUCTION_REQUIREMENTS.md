@@ -64,6 +64,8 @@ flowchart TD
     F2 -->|approved content| C3
 ```
 
+The full design, with each model shown where it is trained, approved and served, is in [production architecture](PRODUCTION_ARCHITECTURE.md). The access to request from IT is in [IT access request](IT_ACCESS_REQUEST.md).
+
 Outcomes loop back to update profiles and consent, and approved models and content feed the decide service. Customer details stay out of queues: messages carry IDs, and each service reads what it needs from the encrypted store.
 
 **Environments:** separate dev, staging and production accounts, with synthetic data only outside production.

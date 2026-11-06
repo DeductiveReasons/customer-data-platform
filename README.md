@@ -4,7 +4,7 @@ An event-driven customer data pipeline in the style of Segment, Hightouch or Rud
 
 Failures in Braze, a CRM or any other destination never stop events from being received. Each destination has its own queue, retries and dead-letter queue.
 
-It also includes a next best action demo for Eric Health, a fictional company: 10,000 made-up people, propensity models, 1,000 message variations with approval statuses, a dummy email and direct mail service, a feedback loop and a web app. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design, and [docs/PRODUCTION_REQUIREMENTS.md](docs/PRODUCTION_REQUIREMENTS.md) for what it would take to run this in production, including the AWS accounts and services to provision.
+It also includes a next best action demo for Eric Health, a fictional company: 10,000 made-up people, propensity models, 1,000 message variations with approval statuses, a dummy email and direct mail service, a feedback loop and a web app. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design, [docs/PRODUCTION_REQUIREMENTS.md](docs/PRODUCTION_REQUIREMENTS.md) for what it would take to run this in production, [docs/PRODUCTION_ARCHITECTURE.md](docs/PRODUCTION_ARCHITECTURE.md) for the production design with every model in the flow, and [docs/IT_ACCESS_REQUEST.md](docs/IT_ACCESS_REQUEST.md) for the accounts, permissions and access to request from IT.
 
 ## Live snapshot
 
